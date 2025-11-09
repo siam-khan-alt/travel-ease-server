@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const { MongoClient, ServerApiVersion } = require('mongodb');
 require('dotenv').config()
-console.log(process.env); 
 
 const app = express()
 const port = process.env.PORT || 3000
@@ -34,6 +33,7 @@ async function run() {
     console.log("Pinged your deployment. You successfully connected to MongoDB!");
 
        const userscollection = db.collection('users')
+       const vehiclescollection = db.collection('vehicles')
     app.get('/users', async(req,res)=>{
         const cursor = userscollection.find()
         const result = await cursor.toArray()
@@ -41,10 +41,21 @@ async function run() {
     })
     app.post('/users', async(req, res)=>{
         const newUser = req.body
-        console.log(newUser);
-        
-        const result = await userscollection.insertOne(newUser)
+        const email = req.body.email
+        const query = {email: email}
+        const userexisting= await userscollection.findOne(query)
+        if(userexisting){
+          return res.status(400).send({ message: 'User already exists. Do not insert again!' });
+      }
+        else{
+         const result = await userscollection.insertOne(newUser)
         res.send(result)
+        }
+        })
+    app.get('/vehicles', async(req, res)=>{
+      const cursor = vehiclescollection.find()
+      const result = await cursor.toArray()
+      res.send(result)
     })
   } finally {
    
