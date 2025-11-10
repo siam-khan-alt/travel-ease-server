@@ -34,6 +34,7 @@ async function run() {
 
        const userscollection = db.collection('users')
        const vehiclescollection = db.collection('vehicles')
+       const bookingscollection = db.collection('bookings')
     app.get('/users', async(req,res)=>{
         const cursor = userscollection.find()
         const result = await cursor.toArray()
@@ -69,7 +70,7 @@ async function run() {
       res.send(result)
     })
     app.get('/vehicles/latest', async(req, res)=>{
-      const cursor = vehiclescollection.find().sort({createdAt: 1}).limit(6)
+      const cursor = vehiclescollection.find().sort({createdAt: -1}).limit(6)
       const result = await cursor.toArray()
       res.send(result)
     })
@@ -90,7 +91,7 @@ async function run() {
       const result = await vehiclescollection.deleteOne(query)
       res.send(result)
     })
-    app.put('/vehicles/:id', async(req, res)=>{
+    app.patch('/vehicles/:id', async(req, res)=>{
       const updateVehicles = req.body
       const id = req.params.id
       const query = {_id: new ObjectId(id)}
@@ -99,6 +100,32 @@ async function run() {
       }
       const result = await vehiclescollection.updateOne(query, updatedata)
       res.send(result)
+    })
+     app.get('/bookings', async(req, res)=>{
+      console.log(req.query);
+      
+       const email = req.query.email
+        const query={}
+        if(email){
+            query.userEmail=email
+        }
+      const cursor = bookingscollection.find(query)
+      const result = await cursor.toArray()
+      res.send(result)
+    })
+    app.post('/bookings',async(req, res)=>{
+      const newBooking  = req.body
+      const query = {
+    userEmail: newBooking.userEmail,
+    vehicleId: newBooking.vehicleId
+  };
+      const vehcleexisting= await bookingscollection.findOne(query )
+      if(vehcleexisting){
+        return res.status(400).send({ message: 'You have already booked this vehicle!' })
+      }
+      else{
+      const result = await bookingscollection.insertOne(newBooking)
+      res.send(result)}
     })
   } finally {
    
