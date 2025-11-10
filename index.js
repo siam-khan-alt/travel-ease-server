@@ -52,8 +52,19 @@ async function run() {
         res.send(result)
         }
         })
-    app.get('/vehicles', async(req, res)=>{
+        app.get('/vehicles', async(req, res)=>{
+      
       const cursor = vehiclescollection.find()
+      const result = await cursor.toArray()
+      res.send(result)
+    })
+    app.get('/vehicles/users', async(req, res)=>{
+       const email = req.query.email
+        const query={}
+        if(email){
+            query.userEmail=email
+        }
+      const cursor = vehiclescollection.find(query)
       const result = await cursor.toArray()
       res.send(result)
     })
@@ -71,6 +82,22 @@ async function run() {
     app.post('/vehicles', async(req, res)=>{
       const newVehicle= req.body
       const result = await vehiclescollection.insertOne(newVehicle)
+      res.send(result)
+    })
+    app.delete('/vehicles/:id', async(req, res)=>{
+      const id = req.params.id
+      const query = {_id: new ObjectId(id)}
+      const result = await vehiclescollection.deleteOne(query)
+      res.send(result)
+    })
+    app.put('/vehicles/:id', async(req, res)=>{
+      const updateVehicles = req.body
+      const id = req.params.id
+      const query = {_id: new ObjectId(id)}
+      const updatedata={
+        $set: updateVehicles
+      }
+      const result = await vehiclescollection.updateOne(query, updatedata)
       res.send(result)
     })
   } finally {
