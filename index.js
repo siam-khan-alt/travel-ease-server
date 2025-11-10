@@ -68,6 +68,11 @@ async function run() {
      const result = await vehiclescollection.findOne(query)
      res.send(result)
     })
+    app.post('/vehicles', async(req, res)=>{
+      const newVehicle= req.body
+      const result = await vehiclescollection.insertOne(newVehicle)
+      res.send(result)
+    })
   } finally {
    
   }
