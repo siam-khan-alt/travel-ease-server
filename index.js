@@ -27,10 +27,11 @@ app.get('/', (req, res)=>{
 async function run() {
   try {
 
-    await client.connect();
+  //  await client.connect();
+
     const db = client.db('travel_db')
-    await client.db("admin").command({ ping: 1 });
-    console.log("Pinged your deployment. You successfully connected to MongoDB!");
+    // await client.db("admin").command({ ping: 1 });
+    
 
        const userscollection = db.collection('users')
        const vehiclescollection = db.collection('vehicles')
@@ -127,6 +128,7 @@ async function run() {
       const result = await bookingscollection.insertOne(newBooking)
       res.send(result)}
     })
+  
   } finally {
    
   }

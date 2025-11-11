@@ -6,6 +6,12 @@
     "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.19.2",
+    "mongodb": "^6.6.0"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
