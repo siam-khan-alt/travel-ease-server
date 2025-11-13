@@ -75,6 +75,11 @@ async function run() {
       const result = await cursor.toArray()
       res.send(result)
     })
+     app.get('/vehicles/topthree', async(req, res)=>{
+      const cursor = vehiclescollection.find().sort({bookingCount: -1}).limit(3)
+      const result = await cursor.toArray()
+      res.send(result)
+    })
     app.get('/vehicles/:id', async(req, res)=>{
      const id = req.params.id
      const query = {_id: new ObjectId(id)}
@@ -120,14 +125,26 @@ async function run() {
     userEmail: newBooking.userEmail,
     vehicleId: newBooking.vehicleId
   };
+  const filter = {_id: new ObjectId(newBooking.vehicleId)}
+  const updateCount ={
+    $inc:{
+      bookingCount:1
+    }
+  }
       const vehcleexisting= await bookingscollection.findOne(query )
       if(vehcleexisting){
         return res.status(400).send({ message: 'You have already booked this vehicle!' })
       }
       else{
-      const result = await bookingscollection.insertOne(newBooking)
-      res.send(result)}
+      
+      const result = await bookingscollection.insertOne(newBooking);
+       await vehiclescollection.updateOne(filter, updateCount)
+      res.send({
+      success: true,
+      insertedId: result.insertedId,
     })
+  }})
+  
   
   } finally {
    
