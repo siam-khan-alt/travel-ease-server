@@ -71,12 +71,12 @@ async function run() {
       res.send(result)
     })
     app.get('/vehicles/latest', async(req, res)=>{
-      const cursor = vehiclescollection.find().sort({createdAt: -1}).limit(6)
+      const cursor = vehiclescollection.find().sort({createdAt: -1}).limit(4)
       const result = await cursor.toArray()
       res.send(result)
     })
-     app.get('/vehicles/topthree', async(req, res)=>{
-      const cursor = vehiclescollection.find().sort({bookingCount: -1}).limit(3)
+     app.get('/vehicles/top', async(req, res)=>{
+      const cursor = vehiclescollection.find().sort({bookingCount: -1}).limit(4)
       const result = await cursor.toArray()
       res.send(result)
     })
