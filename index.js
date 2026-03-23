@@ -32,16 +32,20 @@ app.get("/", (req, res) => {
 const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).send({ message: "Unauthorized Access: No Token Provided" });
+    return res
+      .status(401)
+      .send({ message: "Unauthorized Access: No Token Provided" });
   }
 
   const token = authHeader.split(" ")[1];
   try {
     const decoded = await admin.auth().verifyIdToken(token);
-    req.tokenEmail = decoded.email; 
+    req.tokenEmail = decoded.email;
     next();
   } catch (err) {
-    return res.status(401).send({ message: "Unauthorized Access: Invalid Token" });
+    return res
+      .status(401)
+      .send({ message: "Unauthorized Access: Invalid Token" });
   }
 };
 
@@ -56,28 +60,32 @@ async function run() {
     const vehiclescollection = db.collection("vehicles");
     const bookingscollection = db.collection("bookings");
     const newsletterCollection = db.collection("newsletter");
-    const paymentsCollection = db.collection("payments")
-    
-// Verify
-    const verifyAdmin = async (req, res, next) => {
-  const email = req.tokenEmail;
-  const query = { email: email };
-  const user = await userscollection.findOne(query);
-  if (user?.role !== "admin") {
-    return res.status(403).send({ message: "Forbidden Access: Admins Only" });
-  }
-  next();
-};
+    const paymentsCollection = db.collection("payments");
 
-const verifyHost = async (req, res, next) => {
-  const email = req.tokenEmail;
-  const query = { email: email };
-  const user = await userscollection.findOne(query);
-  if (user?.role !== "host" && user?.role !== "admin") {
-    return res.status(403).send({ message: "Forbidden Access: Hosts Only" });
-  }
-  next();
-};
+    // Verify
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.tokenEmail;
+      const query = { email: email };
+      const user = await userscollection.findOne(query);
+      if (user?.role !== "admin") {
+        return res
+          .status(403)
+          .send({ message: "Forbidden Access: Admins Only" });
+      }
+      next();
+    };
+
+    const verifyHost = async (req, res, next) => {
+      const email = req.tokenEmail;
+      const query = { email: email };
+      const user = await userscollection.findOne(query);
+      if (user?.role !== "host" && user?.role !== "admin") {
+        return res
+          .status(403)
+          .send({ message: "Forbidden Access: Hosts Only" });
+      }
+      next();
+    };
     // userscollection
     app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const cursor = userscollection.find();
@@ -128,7 +136,7 @@ const verifyHost = async (req, res, next) => {
       const result = await userscollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
-    
+
     // Subscriber collection
     app.post("/subscribe", async (req, res) => {
       const { email } = req.body;
@@ -139,11 +147,9 @@ const verifyHost = async (req, res, next) => {
 
       const existing = await newsletterCollection.findOne({ email });
       if (existing) {
-        return res
-          .status(400)
-          .send({
-            message: "You are already subscribed to our elite updates!",
-          });
+        return res.status(400).send({
+          message: "You are already subscribed to our elite updates!",
+        });
       }
 
       const result = await newsletterCollection.insertOne({
@@ -167,45 +173,43 @@ const verifyHost = async (req, res, next) => {
     // paymentsCollection
 
     app.post("/create-payment-intent", async (req, res) => {
-  const { price } = req.body;
-  if (!price) return res.status(400).send({ message: "Price is required" });
-  
-  const amount = parseInt(price * 100); // Cents e convert
+      const { price } = req.body;
+      if (!price) return res.status(400).send({ message: "Price is required" });
 
-  try {
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amount,
-      currency: "usd",
-      payment_method_types: ["card"],
+      const amount = parseInt(price * 100); // Cents e convert
+
+      try {
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: amount,
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.send({ clientSecret: paymentIntent.client_secret });
+      } catch (err) {
+        res.status(500).send({ error: err.message });
+      }
     });
 
-    res.send({ clientSecret: paymentIntent.client_secret });
-  } catch (err) {
-    res.status(500).send({ error: err.message });
-  }
-});
+    app.post("/payments", async (req, res) => {
+      const payment = req.body;
 
-app.post("/payments", async (req, res) => {
-  const payment = req.body;
-  
-  const paymentResult = await paymentsCollection.insertOne(payment);
+      const paymentResult = await paymentsCollection.insertOne(payment);
 
-  const bookingData = {
-    ...payment.bookingDetails,
-    transactionId: payment.transactionId,
-    status: "Paid",
-    paidAt: new Date()
-  };
-  
-  const bookingResult = await bookingscollection.insertOne(bookingData);
+      const bookingData = {
+        ...payment.bookingDetails,
+        transactionId: payment.transactionId,
+        status: "Paid",
+        paidAt: new Date(),
+      };
 
-  const filter = { _id: new ObjectId(payment.bookingDetails.vehicleId) };
-  await vehiclescollection.updateOne(filter, { $inc: { bookingCount: 1 } });
+      const bookingResult = await bookingscollection.insertOne(bookingData);
 
-  res.send({ paymentResult, bookingResult });
-});
+      const filter = { _id: new ObjectId(payment.bookingDetails.vehicleId) };
+      await vehiclescollection.updateOne(filter, { $inc: { bookingCount: 1 } });
 
-
+      res.send({ paymentResult, bookingResult });
+    });
 
     app.get("/vehicles", async (req, res) => {
       const { search, category, sortBy } = req.query;
@@ -262,12 +266,12 @@ app.post("/payments", async (req, res) => {
       const result = await vehiclescollection.findOne(query);
       res.send(result);
     });
-    app.post("/vehicles",verifyToken, verifyHost, async (req, res) => {
+    app.post("/vehicles", verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
       const result = await vehiclescollection.insertOne(newVehicle);
       res.send(result);
     });
-    app.delete("/vehicles/:id",verifyToken, verifyHost, async (req, res) => {
+    app.delete("/vehicles/:id", verifyToken, verifyHost, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await vehiclescollection.deleteOne(query);
@@ -295,51 +299,11 @@ app.post("/payments", async (req, res) => {
 
       res.send(result);
     });
-    app.get("/bookings", async (req, res) => {
-      console.log(req.query);
 
-      const email = req.query.email;
-      const query = {};
-      if (email) {
-        query.userEmail = email;
-      }
-      const cursor = bookingscollection.find(query);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
-    app.get("/user-stats/:email", async (req, res) => {
-      const email = req.params.email;
-
-      const totalVehicles = await vehiclescollection.countDocuments({
-        userEmail: email,
-      });
-
-      const totalBookings = await bookingscollection.countDocuments({
-        userEmail: email,
-      });
-
-      const userVehicles = await vehiclescollection
-        .find({ userEmail: email })
-        .project({ vehicleName: 1, bookingCount: 1, pricePerDay: 1 })
-        .limit(5)
-        .toArray();
-
-      const chartData = userVehicles.map((v) => ({
-        name: v.vehicleName,
-        bookings: v.bookingCount || 0,
-        price: v.pricePerDay || 0,
-      }));
-
-      res.send({
-        totalVehicles,
-        totalBookings,
-        chartData,
-      });
-    });
     app.post("/bookings", verifyToken, async (req, res) => {
       if (req.tokenEmail !== req.body.userEmail) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
       const newBooking = req.body;
       const query = {
         userEmail: newBooking.userEmail,
@@ -363,6 +327,93 @@ app.post("/payments", async (req, res) => {
           success: true,
           insertedId: result.insertedId,
         });
+      }
+    });
+
+    // user dashboard
+    app.get("/user-overview/:email", verifyToken, async (req, res) => {
+  const email = req.params.email;
+  if (req.tokenEmail !== email) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
+
+  try {
+    const totalBookings = await bookingscollection.countDocuments({ userEmail: email });
+const payments = await paymentsCollection
+      .find({ "bookingDetails.userEmail": email })
+      .toArray();
+    if(payments.length > 0) {
+        console.log("First Payment Price Path:", payments[0].bookingDetails?.price);
+    }
+
+    const totalSpent = payments.reduce((sum, p) => {
+      const price = parseFloat(p.bookingDetails?.price || 0);
+      return sum + price;
+    }, 0);
+
+    const recentActivity = await bookingscollection
+      .find({ userEmail: email })
+      .sort({ _id: -1 })
+      .limit(5)
+      .toArray();
+
+    const favoriteCategory = await bookingscollection
+      .aggregate([
+        { $match: { userEmail: email } },
+        { $group: { _id: "$category", count: { $sum: 1 } } },
+        { $sort: { count: -1 } },
+        { $limit: 1 },
+      ])
+      .toArray();
+
+    res.send({
+      stats: {
+        totalBookings,
+        totalSpent: totalSpent.toFixed(2),
+        favCategory: favoriteCategory[0]?._id || "None",
+      },
+      recentActivity,
+    });
+  } catch (err) {
+    console.error("Overview Error:", err);
+    res.status(500).send({ message: "Server Error" });
+  }
+});
+    app.get("/bookings", verifyToken, async (req, res) => {
+      const email = req.query.email;
+      if (!email || req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+
+      try {
+        const result = await bookingscollection
+          .find({ userEmail: email })
+          .sort({ _id: -1 })
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Booking Fetch Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+    app.get("/payments/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+
+      if (req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+
+      const query = { "bookingDetails.userEmail": email };
+
+      try {
+        const result = await paymentsCollection
+          .find(query)
+          .sort({ _id: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching payments" });
       }
     });
   } finally {
