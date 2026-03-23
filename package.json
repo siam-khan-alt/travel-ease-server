@@ -10,7 +10,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.19.2",
-    "mongodb": "^6.6.0"
+    "mongodb": "^6.6.0",
+    "stripe": "^20.4.1"
   },
   "keywords": [],
   "author": "",

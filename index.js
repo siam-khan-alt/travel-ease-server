@@ -7,6 +7,7 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0sp.xsshgji.mongodb.net/?appName=Cluster0SP`;
 const client = new MongoClient(uri, {
@@ -31,18 +32,22 @@ async function run() {
     const userscollection = db.collection("users");
     const vehiclescollection = db.collection("vehicles");
     const bookingscollection = db.collection("bookings");
+    const newsletterCollection = db.collection("newsletter");
+    const paymentsCollection = db.collection("payments")
+    
+    // userscollection
     app.get("/users", async (req, res) => {
       const cursor = userscollection.find();
       const result = await cursor.toArray();
       res.send(result);
     });
     app.get("/users/role/:email", async (req, res) => {
-  const email = req.params.email;
-  const query = { email: email };
-  const user = await userscollection.findOne(query);
-  
-  res.send({ role: user?.role || "user" });
-});
+      const email = req.params.email;
+      const query = { email: email };
+      const user = await userscollection.findOne(query);
+
+      res.send({ role: user?.role || "user" });
+    });
     app.post("/users", async (req, res) => {
       const newUser = req.body;
       const email = req.body.email;
@@ -58,15 +63,15 @@ async function run() {
       }
     });
     app.patch("/users/update-role/:id", async (req, res) => {
-  const id = req.params.id;
-  const { role } = req.body;
-  const filter = { _id: new ObjectId(id) };
-  const updatedDoc = {
-    $set: { role: role },
-  };
-  const result = await userscollection.updateOne(filter, updatedDoc);
-  res.send(result);
-});
+      const id = req.params.id;
+      const { role } = req.body;
+      const filter = { _id: new ObjectId(id) };
+      const updatedDoc = {
+        $set: { role: role },
+      };
+      const result = await userscollection.updateOne(filter, updatedDoc);
+      res.send(result);
+    });
     app.patch("/users/:email", async (req, res) => {
       const email = req.params.email;
       const { name, photo } = req.body;
@@ -80,6 +85,85 @@ async function run() {
       const result = await userscollection.updateOne(filter, updatedDoc);
       res.send(result);
     });
+    
+    // Subscriber collection
+    app.post("/subscribe", async (req, res) => {
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).send({ message: "Email is required!" });
+      }
+
+      const existing = await newsletterCollection.findOne({ email });
+      if (existing) {
+        return res
+          .status(400)
+          .send({
+            message: "You are already subscribed to our elite updates!",
+          });
+      }
+
+      const result = await newsletterCollection.insertOne({
+        email,
+        subscribedAt: new Date(),
+      });
+
+      res.send({
+        success: true,
+        message: "Welcome to the Elite Circle!",
+        insertedId: result.insertedId,
+      });
+    });
+
+    app.get("/subscribers", async (req, res) => {
+      const cursor = newsletterCollection.find().sort({ subscribedAt: -1 });
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    // paymentsCollection
+
+    app.post("/create-payment-intent", async (req, res) => {
+  const { price } = req.body;
+  if (!price) return res.status(400).send({ message: "Price is required" });
+  
+  const amount = parseInt(price * 100); // Cents e convert
+
+  try {
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: amount,
+      currency: "usd",
+      payment_method_types: ["card"],
+    });
+
+    res.send({ clientSecret: paymentIntent.client_secret });
+  } catch (err) {
+    res.status(500).send({ error: err.message });
+  }
+});
+
+app.post("/payments", async (req, res) => {
+  const payment = req.body;
+  
+  const paymentResult = await paymentsCollection.insertOne(payment);
+
+  const bookingData = {
+    ...payment.bookingDetails,
+    transactionId: payment.transactionId,
+    status: "Paid",
+    paidAt: new Date()
+  };
+  
+  const bookingResult = await bookingscollection.insertOne(bookingData);
+
+  const filter = { _id: new ObjectId(payment.bookingDetails.vehicleId) };
+  await vehiclescollection.updateOne(filter, { $inc: { bookingCount: 1 } });
+
+  res.send({ paymentResult, bookingResult });
+});
+
+
+
     app.get("/vehicles", async (req, res) => {
       const { search, category, sortBy } = req.query;
       let query = {};
