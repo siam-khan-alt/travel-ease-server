@@ -61,6 +61,7 @@ async function run() {
     const bookingscollection = db.collection("bookings");
     const newsletterCollection = db.collection("newsletter");
     const paymentsCollection = db.collection("payments");
+    const notificationsCollection = db.collection("notifications");
 
     // Verify
     const verifyAdmin = async (req, res, next) => {
@@ -110,19 +111,67 @@ async function run() {
           .send({ message: "User already exists. Do not insert again!" });
       } else {
         const result = await userscollection.insertOne(newUser);
+        const admins = await userscollection
+          .find({ role: "admin" }, { projection: { email: 1 } })
+          .toArray();
+        const adminNotifs = admins.map((admin) => ({
+          receiverEmail: admin.email,
+          title: "New User Joined!",
+          message: `A new user ${newUser.email} has registered.`,
+          type: "admin_alert",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/manage-users",
+        }));
+        if (adminNotifs.length > 0)
+          await notificationsCollection.insertMany(adminNotifs);
         res.send(result);
       }
     });
-    app.patch("/users/update-role/:id", async (req, res) => {
-      const id = req.params.id;
-      const { role } = req.body;
-      const filter = { _id: new ObjectId(id) };
-      const updatedDoc = {
-        $set: { role: role },
-      };
-      const result = await userscollection.updateOne(filter, updatedDoc);
-      res.send(result);
-    });
+    app.patch(
+      "/users/update-role/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { role } = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const user = await userscollection.findOne(filter);
+        const updatedDoc = {
+          $set: { role: role },
+        };
+        const result = await userscollection.updateOne(filter, updatedDoc);
+
+        if (result.modifiedCount > 0) {
+          const admins = await userscollection
+            .find({ role: "admin" }, { projection: { email: 1 } })
+            .toArray();
+
+          const adminNotifs = admins.map((admin) => ({
+            receiverEmail: admin.email,
+            title: "Role Change Alert",
+            message: `User ${user.email} has been updated to ${role}.`,
+            type: "system",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/manage-users",
+          }));
+
+          const userNotif = {
+            receiverEmail: user.email,
+            title: "Role Updated!",
+            message: `Congratulations! Your account has been upgraded to ${role} level.`,
+            type: "system",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/profile",
+          };
+
+          await notificationsCollection.insertMany([...adminNotifs, userNotif]);
+        }
+        res.send(result);
+      }
+    );
     app.patch("/users/:email", async (req, res) => {
       const email = req.params.email;
       const { name, photo } = req.body;
@@ -196,19 +245,66 @@ async function run() {
 
       const paymentResult = await paymentsCollection.insertOne(payment);
 
-      const bookingData = {
-        ...payment.bookingDetails,
-        transactionId: payment.transactionId,
-        status: "Paid",
-        paidAt: new Date(),
+      const filter = { _id: new ObjectId(payment.bookingId) };
+      const updatedDoc = {
+        $set: {
+          status: "Paid",
+          transactionId: payment.transactionId,
+          paidAt: new Date(),
+        },
       };
 
-      const bookingResult = await bookingscollection.insertOne(bookingData);
+      const bookingUpdateResult = await bookingscollection.updateOne(
+        filter,
+        updatedDoc
+      );
 
-      const filter = { _id: new ObjectId(payment.bookingDetails.vehicleId) };
-      await vehiclescollection.updateOne(filter, { $inc: { bookingCount: 1 } });
+      const vehicleFilter = {
+        _id: new ObjectId(payment.bookingDetails.vehicleId),
+      };
+      await vehiclescollection.updateOne(vehicleFilter, {
+        $inc: { bookingCount: 1 },
+      });
+      const admins = await userscollection
+        .find({ role: "admin" }, { projection: { email: 1 } })
+        .toArray();
+      const adminEmails = admins.map((admin) => admin.email);
 
-      res.send({ paymentResult, bookingResult });
+      const notifications = [
+        {
+          receiverEmail: payment.bookingDetails.userEmail,
+          title: "Payment Successful!",
+          message: `Your booking for ${payment.bookingDetails.vehicleName} is now confirmed.`,
+          type: "payment",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/my-bookings",
+        },
+        {
+          receiverEmail: payment.bookingDetails.hostEmail,
+          title: "Booking Paid!",
+          message: `The request for your ${payment.bookingDetails.vehicleName} has been paid.`,
+          type: "booking_confirmed",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/host-overview",
+        },
+      ];
+      adminEmails.forEach((email) => {
+        notifications.push({
+          receiverEmail: email,
+          title: "New Transaction",
+          message: `A payment of $${payment.bookingDetails.price} was received from ${payment.bookingDetails.userEmail}.`,
+          type: "admin_alert",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/admin-overview",
+        });
+      });
+
+      await notificationsCollection.insertMany(notifications);
+
+      res.send({ paymentResult, bookingUpdateResult });
     });
 
     app.get("/vehicles", async (req, res) => {
@@ -300,85 +396,109 @@ async function run() {
       res.send(result);
     });
 
+    // user dashboard
+
     app.post("/bookings", verifyToken, async (req, res) => {
       if (req.tokenEmail !== req.body.userEmail) {
         return res.status(403).send({ message: "Forbidden Access" });
       }
+
       const newBooking = req.body;
+
       const query = {
         userEmail: newBooking.userEmail,
         vehicleId: newBooking.vehicleId,
+        status: { $in: ["Pending", "Accepted", "Paid"] },
       };
 
-      const vehcleexisting = await bookingscollection.findOne(query);
-      if (vehcleexisting) {
-        return res
-          .status(400)
-          .send({ message: "You have already booked this vehicle!" });
-      } else {
-        const result = await bookingscollection.insertOne(newBooking);
-        const filter = { _id: new ObjectId(newBooking.vehicleId) };
-        const updateDoc = {
-          $inc: { bookingCount: 1 },
-        };
+      const existing = await bookingscollection.findOne(query);
 
-        await vehiclescollection.updateOne(filter, updateDoc);
-        res.send({
-          success: true,
-          insertedId: result.insertedId,
+      if (existing) {
+        return res.status(400).send({
+          message:
+            "You already have an active request or booking for this vehicle!",
         });
       }
-    });
 
-    // user dashboard
+      const bookingData = {
+        ...newBooking,
+        status: "Pending",
+        requestDate: new Date(),
+      };
+
+      const result = await bookingscollection.insertOne(bookingData);
+
+      const hostNotification = {
+        receiverEmail: newBooking.hostEmail,
+        title: "New Rental Request",
+        message: `${newBooking.userName} wishes to rent your ${newBooking.vehicleName}.`,
+        type: "request",
+        isRead: false,
+        timestamp: new Date(),
+        link: "/dashboard/manage-bookings",
+      };
+
+      await notificationsCollection.insertOne(hostNotification);
+
+      res.send({
+        success: true,
+        message: "Request sent to host successfully!",
+        insertedId: result.insertedId,
+      });
+    });
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
-  const email = req.params.email;
-  if (req.tokenEmail !== email) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
+      const email = req.params.email;
+      if (req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
 
-  try {
-    const totalBookings = await bookingscollection.countDocuments({ userEmail: email });
-const payments = await paymentsCollection
-      .find({ "bookingDetails.userEmail": email })
-      .toArray();
-    if(payments.length > 0) {
-        console.log("First Payment Price Path:", payments[0].bookingDetails?.price);
-    }
+      try {
+        const totalBookings = await bookingscollection.countDocuments({
+          userEmail: email,
+        });
+        const payments = await paymentsCollection
+          .find({ "bookingDetails.userEmail": email })
+          .toArray();
+        if (payments.length > 0) {
+          console.log(
+            "First Payment Price Path:",
+            payments[0].bookingDetails?.price
+          );
+        }
 
-    const totalSpent = payments.reduce((sum, p) => {
-      const price = parseFloat(p.bookingDetails?.price || 0);
-      return sum + price;
-    }, 0);
+        const totalSpent = payments.reduce((sum, p) => {
+          const price = parseFloat(p.bookingDetails?.price || 0);
+          return sum + price;
+        }, 0);
 
-    const recentActivity = await bookingscollection
-      .find({ userEmail: email })
-      .sort({ _id: -1 })
-      .limit(5)
-      .toArray();
+        const recentActivity = await bookingscollection
+          .find({ userEmail: email })
+          .sort({ _id: -1 })
+          .limit(5)
+          .toArray();
 
-    const favoriteCategory = await bookingscollection
-      .aggregate([
-        { $match: { userEmail: email } },
-        { $group: { _id: "$category", count: { $sum: 1 } } },
-        { $sort: { count: -1 } },
-        { $limit: 1 },
-      ])
-      .toArray();
+        const favoriteCategory = await bookingscollection
+          .aggregate([
+            { $match: { userEmail: email } },
+            { $group: { _id: "$category", count: { $sum: 1 } } },
+            { $sort: { count: -1 } },
+            { $limit: 1 },
+          ])
+          .toArray();
 
-    res.send({
-      stats: {
-        totalBookings,
-        totalSpent: totalSpent.toFixed(2),
-        favCategory: favoriteCategory[0]?._id || "None",
-      },
-      recentActivity,
+        res.send({
+          stats: {
+            totalBookings,
+            totalSpent: totalSpent.toFixed(2),
+            favCategory: favoriteCategory[0]?._id || "None",
+          },
+          recentActivity,
+        });
+      } catch (err) {
+        console.error("Overview Error:", err);
+        res.status(500).send({ message: "Server Error" });
+      }
     });
-  } catch (err) {
-    console.error("Overview Error:", err);
-    res.status(500).send({ message: "Server Error" });
-  }
-});
     app.get("/bookings", verifyToken, async (req, res) => {
       const email = req.query.email;
       if (!email || req.tokenEmail !== email) {
@@ -418,89 +538,178 @@ const payments = await paymentsCollection
     });
 
     // --- Host Dashboard ---
-app.get("/host-overview/:email", verifyToken, verifyHost, async (req, res) => {
-  const email = req.params.email;
+    app.patch(
+      "/bookings/accept/:id",
+      verifyToken,
+      verifyHost,
+      async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
 
-  if (req.tokenEmail !== email) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
+        const booking = await bookingscollection.findOne(filter);
+        if (!booking)
+          return res.status(404).send({ message: "Booking not found" });
 
-  try {
-    const totalVehicles = await vehiclescollection.countDocuments({ userEmail: email });
+        const updateDoc = { $set: { status: "Accepted" } };
+        const result = await bookingscollection.updateOne(filter, updateDoc);
 
-    const hostVehicles = await vehiclescollection.find({ userEmail: email }, { projection: { _id: 1, vehicleName: 1 } }).toArray();
-    const vehicleIds = hostVehicles.map(v => v._id.toString());
+        if (result.modifiedCount > 0) {
+          await notificationsCollection.insertOne({
+            receiverEmail: booking.userEmail,
+            title: "Request Approved!",
+            message: `Your request for ${booking.vehicleName} has been approved. Please complete the payment.`,
+            type: "approval",
+            isRead: false,
+            timestamp: new Date(),
+            link: `/dashboard/payment/${booking._id}`,
+          });
+        }
 
-    const hostPayments = await paymentsCollection.find({
-      "bookingDetails.vehicleId": { $in: vehicleIds }
-    }).toArray();
+        res.send(result);
+      }
+    );
+    app.get(
+      "/host-overview/:email",
+      verifyToken,
+      verifyHost,
+      async (req, res) => {
+        const email = req.params.email;
 
-    const totalRevenue = hostPayments.reduce((sum, p) => sum + parseFloat(p.bookingDetails?.price || 0), 0);
-    const totalBookings = hostPayments.length;
+        if (req.tokenEmail !== email) {
+          return res.status(403).send({ message: "Forbidden Access" });
+        }
 
-    const recentActivity = await bookingscollection.find({
-      vehicleId: { $in: vehicleIds }
-    })
-    .sort({ _id: -1 })
-    .limit(5)
-    .toArray();
+        try {
+          const totalVehicles = await vehiclescollection.countDocuments({
+            userEmail: email,
+          });
 
-    res.send({
-      stats: {
-        totalVehicles,
-        totalBookings,
-        totalRevenue: totalRevenue.toFixed(2),
-        activeAssets: hostVehicles.length
-      },
-      recentActivity,
-      chartData: hostPayments.map(p => ({
-        name: p.bookingDetails?.vehicleName?.split(' ')[0],
-        price: p.bookingDetails?.price,
-        date: p.transactionId?.slice(-5) 
-      }))
+          const hostVehicles = await vehiclescollection
+            .find(
+              { userEmail: email },
+              { projection: { _id: 1, vehicleName: 1 } }
+            )
+            .toArray();
+          const vehicleIds = hostVehicles.map((v) => v._id.toString());
+
+          const hostPayments = await paymentsCollection
+            .find({
+              "bookingDetails.vehicleId": { $in: vehicleIds },
+            })
+            .toArray();
+
+          const totalRevenue = hostPayments.reduce(
+            (sum, p) => sum + parseFloat(p.bookingDetails?.price || 0),
+            0
+          );
+          const totalBookings = hostPayments.length;
+
+          const recentActivity = await bookingscollection
+            .find({
+              vehicleId: { $in: vehicleIds },
+            })
+            .sort({ _id: -1 })
+            .limit(5)
+            .toArray();
+
+          res.send({
+            stats: {
+              totalVehicles,
+              totalBookings,
+              totalRevenue: totalRevenue.toFixed(2),
+              activeAssets: hostVehicles.length,
+            },
+            recentActivity,
+            chartData: hostPayments.map((p) => ({
+              name: p.bookingDetails?.vehicleName?.split(" ")[0],
+              price: p.bookingDetails?.price,
+              date: p.transactionId?.slice(-5),
+            })),
+          });
+        } catch (err) {
+          res.status(500).send({ message: "Host Stats Load Failed" });
+        }
+      }
+    );
+
+    // --- Admin Dashboard ---
+    app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
+      try {
+        const totalUsers = await userscollection.countDocuments();
+        const totalVehicles = await vehiclescollection.countDocuments();
+        const totalBookings = await bookingscollection.countDocuments();
+        const totalSubscribers = await newsletterCollection.countDocuments();
+
+        const allPayments = await paymentsCollection.find().toArray();
+        const totalRevenue = allPayments.reduce(
+          (sum, p) => sum + parseFloat(p.bookingDetails?.price || 0),
+          0
+        );
+
+        const userRoles = await userscollection
+          .aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }])
+          .toArray();
+
+        const recentTransactions = await paymentsCollection
+          .find()
+          .sort({ _id: -1 })
+          .limit(6)
+          .toArray();
+
+        res.send({
+          stats: {
+            totalUsers,
+            totalVehicles,
+            totalBookings,
+            totalRevenue: totalRevenue.toFixed(2),
+            totalSubscribers,
+          },
+          userRoles,
+          recentTransactions,
+        });
+      } catch (err) {
+        console.error("Admin Stats Error:", err);
+        res.status(500).send({ message: "Global Stats Load Failed" });
+      }
     });
 
-  } catch (err) {
-    res.status(500).send({ message: "Host Stats Load Failed" });
-  }
-});
+    // --- NOTIFICATIONS SYSTEM ---
 
-// --- Admin Dashboard ---
-app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const totalUsers = await userscollection.countDocuments();
-    const totalVehicles = await vehiclescollection.countDocuments();
-    const totalBookings = await bookingscollection.countDocuments();
-    const totalSubscribers = await newsletterCollection.countDocuments();
-
-    const allPayments = await paymentsCollection.find().toArray();
-    const totalRevenue = allPayments.reduce((sum, p) => sum + parseFloat(p.bookingDetails?.price || 0), 0);
-
-    const userRoles = await userscollection.aggregate([
-      { $group: { _id: "$role", count: { $sum: 1 } } }
-    ]).toArray();
-
-    const recentTransactions = await paymentsCollection.find()
-      .sort({ _id: -1 })
-      .limit(6)
-      .toArray();
-
-    res.send({
-      stats: {
-        totalUsers,
-        totalVehicles,
-        totalBookings,
-        totalRevenue: totalRevenue.toFixed(2),
-        totalSubscribers
-      },
-      userRoles,
-      recentTransactions
+    app.get("/notifications/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      if (req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
+      const query = { receiverEmail: email };
+      const result = await notificationsCollection
+        .find(query)
+        .sort({ timestamp: -1 })
+        .toArray();
+      res.send(result);
     });
-  } catch (err) {
-    console.error("Admin Stats Error:", err);
-    res.status(500).send({ message: "Global Stats Load Failed" });
-  }
-});
+
+    app.patch("/notifications/read/:id", verifyToken, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = { $set: { isRead: true } };
+      const result = await notificationsCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+
+    app.patch(
+      "/notifications/read-all/:email",
+      verifyToken,
+      async (req, res) => {
+        const email = req.params.email;
+        const filter = { receiverEmail: email, isRead: false };
+        const updateDoc = { $set: { isRead: true } };
+        const result = await notificationsCollection.updateMany(
+          filter,
+          updateDoc
+        );
+        res.send(result);
+      }
+    );
   } finally {
   }
 }
