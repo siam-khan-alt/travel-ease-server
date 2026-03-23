@@ -2,11 +2,18 @@ const express = require("express");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 require("dotenv").config();
-
+const admin = require("firebase-admin");
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf-8"
+);
+const serviceAccount = JSON.parse(decoded);
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
 const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0sp.xsshgji.mongodb.net/?appName=Cluster0SP`;
@@ -22,6 +29,22 @@ app.get("/", (req, res) => {
   res.send("travel each");
 });
 
+const verifyToken = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).send({ message: "Unauthorized Access: No Token Provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.tokenEmail = decoded.email; 
+    next();
+  } catch (err) {
+    return res.status(401).send({ message: "Unauthorized Access: Invalid Token" });
+  }
+};
+
 async function run() {
   try {
     //  await client.connect();
@@ -35,8 +58,28 @@ async function run() {
     const newsletterCollection = db.collection("newsletter");
     const paymentsCollection = db.collection("payments")
     
+// Verify
+    const verifyAdmin = async (req, res, next) => {
+  const email = req.tokenEmail;
+  const query = { email: email };
+  const user = await userscollection.findOne(query);
+  if (user?.role !== "admin") {
+    return res.status(403).send({ message: "Forbidden Access: Admins Only" });
+  }
+  next();
+};
+
+const verifyHost = async (req, res, next) => {
+  const email = req.tokenEmail;
+  const query = { email: email };
+  const user = await userscollection.findOne(query);
+  if (user?.role !== "host" && user?.role !== "admin") {
+    return res.status(403).send({ message: "Forbidden Access: Hosts Only" });
+  }
+  next();
+};
     // userscollection
-    app.get("/users", async (req, res) => {
+    app.get("/users", verifyToken, verifyAdmin, async (req, res) => {
       const cursor = userscollection.find();
       const result = await cursor.toArray();
       res.send(result);
@@ -219,12 +262,12 @@ app.post("/payments", async (req, res) => {
       const result = await vehiclescollection.findOne(query);
       res.send(result);
     });
-    app.post("/vehicles", async (req, res) => {
+    app.post("/vehicles",verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
       const result = await vehiclescollection.insertOne(newVehicle);
       res.send(result);
     });
-    app.delete("/vehicles/:id", async (req, res) => {
+    app.delete("/vehicles/:id",verifyToken, verifyHost, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await vehiclescollection.deleteOne(query);
@@ -293,7 +336,10 @@ app.post("/payments", async (req, res) => {
         chartData,
       });
     });
-    app.post("/bookings", async (req, res) => {
+    app.post("/bookings", verifyToken, async (req, res) => {
+      if (req.tokenEmail !== req.body.userEmail) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
       const newBooking = req.body;
       const query = {
         userEmail: newBooking.userEmail,
