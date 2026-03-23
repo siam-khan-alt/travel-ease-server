@@ -416,6 +416,91 @@ const payments = await paymentsCollection
         res.status(500).send({ message: "Error fetching payments" });
       }
     });
+
+    // --- Host Dashboard ---
+app.get("/host-overview/:email", verifyToken, verifyHost, async (req, res) => {
+  const email = req.params.email;
+
+  if (req.tokenEmail !== email) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
+
+  try {
+    const totalVehicles = await vehiclescollection.countDocuments({ userEmail: email });
+
+    const hostVehicles = await vehiclescollection.find({ userEmail: email }, { projection: { _id: 1, vehicleName: 1 } }).toArray();
+    const vehicleIds = hostVehicles.map(v => v._id.toString());
+
+    const hostPayments = await paymentsCollection.find({
+      "bookingDetails.vehicleId": { $in: vehicleIds }
+    }).toArray();
+
+    const totalRevenue = hostPayments.reduce((sum, p) => sum + parseFloat(p.bookingDetails?.price || 0), 0);
+    const totalBookings = hostPayments.length;
+
+    const recentActivity = await bookingscollection.find({
+      vehicleId: { $in: vehicleIds }
+    })
+    .sort({ _id: -1 })
+    .limit(5)
+    .toArray();
+
+    res.send({
+      stats: {
+        totalVehicles,
+        totalBookings,
+        totalRevenue: totalRevenue.toFixed(2),
+        activeAssets: hostVehicles.length
+      },
+      recentActivity,
+      chartData: hostPayments.map(p => ({
+        name: p.bookingDetails?.vehicleName?.split(' ')[0],
+        price: p.bookingDetails?.price,
+        date: p.transactionId?.slice(-5) 
+      }))
+    });
+
+  } catch (err) {
+    res.status(500).send({ message: "Host Stats Load Failed" });
+  }
+});
+
+// --- Admin Dashboard ---
+app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const totalUsers = await userscollection.countDocuments();
+    const totalVehicles = await vehiclescollection.countDocuments();
+    const totalBookings = await bookingscollection.countDocuments();
+    const totalSubscribers = await newsletterCollection.countDocuments();
+
+    const allPayments = await paymentsCollection.find().toArray();
+    const totalRevenue = allPayments.reduce((sum, p) => sum + parseFloat(p.bookingDetails?.price || 0), 0);
+
+    const userRoles = await userscollection.aggregate([
+      { $group: { _id: "$role", count: { $sum: 1 } } }
+    ]).toArray();
+
+    const recentTransactions = await paymentsCollection.find()
+      .sort({ _id: -1 })
+      .limit(6)
+      .toArray();
+
+    res.send({
+      stats: {
+        totalUsers,
+        totalVehicles,
+        totalBookings,
+        totalRevenue: totalRevenue.toFixed(2),
+        totalSubscribers
+      },
+      userRoles,
+      recentTransactions
+    });
+  } catch (err) {
+    console.error("Admin Stats Error:", err);
+    res.status(500).send({ message: "Global Stats Load Failed" });
+  }
+});
   } finally {
   }
 }
