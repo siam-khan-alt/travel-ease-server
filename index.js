@@ -9,6 +9,7 @@ app.use(cors({
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
+      "https://travel-ease-drab.vercel.app"
     ],
     credentials: true,
     optionSuccessStatus: 200,
@@ -101,7 +102,7 @@ async function run() {
       res.send(result);
     });
     app.get("/users/role/:email", async (req, res) => {
-      const email = req.params.email;
+      const email = req.params.email.toLowerCase();
       const query = { email: email };
       const user = await userscollection.findOne(query);
 
@@ -180,7 +181,7 @@ async function run() {
       }
     );
     app.patch("/users/:email", async (req, res) => {
-      const email = req.params.email;
+      const email = req.params.email.toLowerCase();
       const { name, photo } = req.body;
       const filter = { email: email };
       const updatedDoc = {
@@ -462,7 +463,7 @@ async function run() {
 });
 
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
+      const email = req.params.email.toLowerCase();
       if (req.tokenEmail !== email) {
         return res.status(403).send({ message: "Forbidden Access" });
       }
@@ -528,7 +529,7 @@ async function run() {
 });
  
     app.get("/payments/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
+      const email = req.params.email.toLowerCase();
 
       if (req.tokenEmail !== email) {
         return res.status(403).send({ message: "Forbidden Access" });
@@ -583,7 +584,7 @@ async function run() {
       verifyToken,
       verifyHost,
       async (req, res) => {
-        const email = req.params.email;
+        const email = req.params.email.toLowerCase();
 
         if (req.tokenEmail !== email) {
           return res.status(403).send({ message: "Forbidden Access" });
@@ -706,7 +707,7 @@ async function run() {
     // --- NOTIFICATIONS SYSTEM ---
 
     app.get("/notifications/:email", verifyToken, async (req, res) => {
-      const email = req.params.email;
+      const email = req.params.email.toLowerCase();
       if (req.tokenEmail !== email) {
         return res.status(403).send({ message: "Forbidden Access" });
       }
@@ -730,7 +731,7 @@ async function run() {
       "/notifications/read-all/:email",
       verifyToken,
       async (req, res) => {
-        const email = req.params.email;
+        const email = req.params.email.toLowerCase();
         const filter = { receiverEmail: email, isRead: false };
         const updateDoc = { $set: { isRead: true } };
         const result = await notificationsCollection.updateMany(
