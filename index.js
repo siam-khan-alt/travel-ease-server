@@ -341,16 +341,7 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
-    app.get("/vehicles/users", async (req, res) => {
-      const email = req.query.email;
-      const query = {};
-      if (email) {
-        query.userEmail = email;
-      }
-      const cursor = vehiclescollection.find(query);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
+
     app.get("/vehicles/latest", async (req, res) => {
       const cursor = vehiclescollection.find().sort({ createdAt: -1 }).limit(4);
       const result = await cursor.toArray();
@@ -364,7 +355,7 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
-    app.get("/vehicles/:id", async (req, res) => {
+    app.get("/vehicles/:id", verifyToken, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await vehiclescollection.findOne(query);
@@ -663,6 +654,77 @@ async function run() {
       }
     });
 
+    app.get("/vehicles/host/:email", verifyToken, verifyHost, async (req, res) => {
+  const email = req.params.email.toLowerCase();
+
+  if (req.tokenEmail !== email) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
+
+  const query = { userEmail: { $regex: new RegExp(`^${email}$`, "i") } }; 
+  const result = await vehiclescollection.find(query).toArray();
+  res.send(result);
+});
+app.patch("/vehicles/:id", verifyToken, verifyHost, async (req, res) => {
+  const id = req.params.id;
+  const updateData = req.body;
+  const query = { _id: new ObjectId(id) };
+  
+  delete updateData._id; 
+
+  const updatedDoc = {
+    $set: {
+      ...updateData,
+    },
+  };
+
+  const result = await vehiclescollection.updateOne(query, updatedDoc);
+  res.send(result);
+});
+
+app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
+    try {
+        const email = req.params.email.toLowerCase();
+        
+        const hostVehicles = await vehiclescollection.find({ userEmail: email }).toArray();
+        const vehicleIds = hostVehicles.map(v => v._id.toString());
+        
+        const categoryMap = hostVehicles.reduce((acc, v) => {
+            acc[v._id.toString()] = v.categories || "Standard";
+            return acc;
+        }, {});
+
+        const payments = await paymentsCollection.find({
+            "bookingDetails.vehicleId": { $in: vehicleIds }
+        }).toArray();
+
+        const vehicleRevenue = {};
+        const categoryRevenue = {};
+        const monthlyRevenue = {};
+
+        payments.forEach(p => {
+            const price = parseFloat(p.bookingDetails?.price || 0);
+            const vName = p.bookingDetails?.vehicleName || "Unknown";
+            const vId = p.bookingDetails?.vehicleId;
+            const cat = categoryMap[vId] || "Standard";
+            
+            const date = p.createdAt ? new Date(p.createdAt) : new Date(parseInt(p._id.toString().substring(0, 8), 16) * 1000);
+            const month = date.toLocaleString('default', { month: 'short' });
+
+            vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + price;
+            categoryRevenue[cat] = (categoryRevenue[cat] || 0) + price;
+            monthlyRevenue[month] = (monthlyRevenue[month] || 0) + price;
+        });
+
+        const vehicleChartData = Object.keys(vehicleRevenue).map(name => ({ name, value: vehicleRevenue[name] }));
+        const categoryChartData = Object.keys(categoryRevenue).map(name => ({ name, value: categoryRevenue[name] }));
+        const monthlyChartData = Object.keys(monthlyRevenue).map(name => ({ name, revenue: monthlyRevenue[name] }));
+
+        res.send({ vehicleChartData, categoryChartData, monthlyChartData });
+    } catch (error) {
+        res.status(500).send({ message: "Analytics load failed" });
+    }
+});
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
       try {
