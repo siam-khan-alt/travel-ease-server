@@ -5,7 +5,14 @@ require("dotenv").config();
 const admin = require("firebase-admin");
 const app = express();
 const port = process.env.PORT || 3000;
-app.use(cors());
+app.use(cors({
+    origin: [
+      "http://localhost:5173",
+      "http://localhost:5174",
+    ],
+    credentials: true,
+    optionSuccessStatus: 200,
+  }));
 app.use(express.json());
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
   "utf-8"
@@ -287,7 +294,7 @@ async function run() {
           type: "booking_confirmed",
           isRead: false,
           timestamp: new Date(),
-          link: "/dashboard/host-overview",
+          link: "/dashboard/overview",
         },
       ];
       adminEmails.forEach((email) => {
@@ -298,7 +305,7 @@ async function run() {
           type: "admin_alert",
           isRead: false,
           timestamp: new Date(),
-          link: "/dashboard/admin-overview",
+          link: "/dashboard/overview",
         });
       });
 
@@ -435,7 +442,7 @@ async function run() {
         type: "request",
         isRead: false,
         timestamp: new Date(),
-        link: "/dashboard/manage-bookings",
+        link: "/dashboard/booking-requests",
       };
 
       await notificationsCollection.insertOne(hostNotification);
@@ -446,6 +453,14 @@ async function run() {
         insertedId: result.insertedId,
       });
     });
+
+    app.get("/booking-details/:id", verifyToken, async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const result = await bookingscollection.findOne(query);
+  res.send(result);
+});
+
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
       if (req.tokenEmail !== email) {
@@ -499,24 +514,19 @@ async function run() {
         res.status(500).send({ message: "Server Error" });
       }
     });
+
     app.get("/bookings", verifyToken, async (req, res) => {
-      const email = req.query.email;
-      if (!email || req.tokenEmail !== email) {
-        return res.status(403).send({ message: "Forbidden Access" });
-      }
+  const email = req.query.email.toLowerCase();
 
-      try {
-        const result = await bookingscollection
-          .find({ userEmail: email })
-          .sort({ _id: -1 })
-          .toArray();
+  if (req.tokenEmail !== email) {
+    return res.status(403).send({ message: "Forbidden Access" });
+  }
 
-        res.send(result);
-      } catch (error) {
-        console.error("Booking Fetch Error:", error);
-        res.status(500).send({ message: "Internal Server Error" });
-      }
-    });
+  const query = { userEmail: email };
+  const result = await bookingscollection.find(query).toArray();
+  res.send(result);
+});
+ 
     app.get("/payments/:email", verifyToken, async (req, res) => {
       const email = req.params.email;
 
@@ -561,7 +571,7 @@ async function run() {
             type: "approval",
             isRead: false,
             timestamp: new Date(),
-            link: `/dashboard/payment/${booking._id}`,
+            link: `/payment/${booking._id}`,
           });
         }
 
@@ -631,6 +641,26 @@ async function run() {
         }
       }
     );
+       app.get("/bookings/host/:email", verifyToken, async (req, res) => {
+      const email = req.params.email.toLowerCase(); 
+
+    if (!email || req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+    }
+
+    try {
+        const query = { hostEmail: email }; 
+        const result = await bookingscollection
+            .find(query)
+            .sort({ _id: -1 })
+            .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Booking Fetch Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
