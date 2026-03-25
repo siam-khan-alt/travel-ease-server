@@ -5,15 +5,17 @@ require("dotenv").config();
 const admin = require("firebase-admin");
 const app = express();
 const port = process.env.PORT || 3000;
-app.use(cors({
+app.use(
+  cors({
     origin: [
       "http://localhost:5173",
       "http://localhost:5174",
-      "https://travel-ease-drab.vercel.app"
+      "https://travel-ease-drab.vercel.app",
     ],
     credentials: true,
     optionSuccessStatus: 200,
-  }));
+  })
+);
 app.use(express.json());
 const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
   "utf-8"
@@ -355,7 +357,7 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
-    
+
     app.post("/vehicles", verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
       const result = await vehiclescollection.insertOne(newVehicle);
@@ -442,11 +444,11 @@ async function run() {
     });
 
     app.get("/booking-details/:id", verifyToken, async (req, res) => {
-  const id = req.params.id;
-  const query = { _id: new ObjectId(id) };
-  const result = await bookingscollection.findOne(query);
-  res.send(result);
-});
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await bookingscollection.findOne(query);
+      res.send(result);
+    });
 
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
@@ -503,17 +505,17 @@ async function run() {
     });
 
     app.get("/bookings", verifyToken, async (req, res) => {
-  const email = req.query.email.toLowerCase();
+      const email = req.query.email.toLowerCase();
 
-  if (req.tokenEmail !== email) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
+      if (req.tokenEmail !== email) {
+        return res.status(403).send({ message: "Forbidden Access" });
+      }
 
-  const query = { userEmail: email };
-  const result = await bookingscollection.find(query).toArray();
-  res.send(result);
-});
- 
+      const query = { userEmail: email };
+      const result = await bookingscollection.find(query).toArray();
+      res.send(result);
+    });
+
     app.get("/payments/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
 
@@ -628,19 +630,19 @@ async function run() {
         }
       }
     );
-       app.get("/bookings/host/:email", verifyToken, async (req, res) => {
-      const email = req.params.email.toLowerCase(); 
+    app.get("/bookings/host/:email", verifyToken, async (req, res) => {
+      const email = req.params.email.toLowerCase();
 
-    if (!email || req.tokenEmail !== email) {
+      if (!email || req.tokenEmail !== email) {
         return res.status(403).send({ message: "Forbidden Access" });
-    }
+      }
 
-    try {
-        const query = { hostEmail: email }; 
+      try {
+        const query = { hostEmail: email };
         const result = await bookingscollection
-            .find(query)
-            .sort({ _id: -1 })
-            .toArray();
+          .find(query)
+          .sort({ _id: -1 })
+          .toArray();
 
         res.send(result);
       } catch (error) {
@@ -649,76 +651,102 @@ async function run() {
       }
     });
 
-    app.get("/vehicles/host/:email", verifyToken, verifyHost, async (req, res) => {
-  const email = req.params.email.toLowerCase();
-
-  if (req.tokenEmail !== email) {
-    return res.status(403).send({ message: "Forbidden Access" });
-  }
-
-  const query = { userEmail: { $regex: new RegExp(`^${email}$`, "i") } }; 
-  const result = await vehiclescollection.find(query).toArray();
-  res.send(result);
-});
-app.patch("/vehicles/:id", verifyToken, verifyHost, async (req, res) => {
-  const id = req.params.id;
-  const updateData = req.body;
-  const query = { _id: new ObjectId(id) };
-  
-  delete updateData._id; 
-
-  const updatedDoc = {
-    $set: {
-      ...updateData,
-    },
-  };
-
-  const result = await vehiclescollection.updateOne(query, updatedDoc);
-  res.send(result);
-});
-
-app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
-    try {
+    app.get(
+      "/vehicles/host/:email",
+      verifyToken,
+      verifyHost,
+      async (req, res) => {
         const email = req.params.email.toLowerCase();
-        
-        const hostVehicles = await vehiclescollection.find({ userEmail: email }).toArray();
-        const vehicleIds = hostVehicles.map(v => v._id.toString());
-        
-        const categoryMap = hostVehicles.reduce((acc, v) => {
-            acc[v._id.toString()] = v.categories || "Standard";
-            return acc;
-        }, {});
 
-        const payments = await paymentsCollection.find({
-            "bookingDetails.vehicleId": { $in: vehicleIds }
-        }).toArray();
+        if (req.tokenEmail !== email) {
+          return res.status(403).send({ message: "Forbidden Access" });
+        }
 
-        const vehicleRevenue = {};
-        const categoryRevenue = {};
-        const monthlyRevenue = {};
+        const query = { userEmail: { $regex: new RegExp(`^${email}$`, "i") } };
+        const result = await vehiclescollection.find(query).toArray();
+        res.send(result);
+      }
+    );
+    app.patch("/vehicles/:id", verifyToken, verifyHost, async (req, res) => {
+      const id = req.params.id;
+      const updateData = req.body;
+      const query = { _id: new ObjectId(id) };
 
-        payments.forEach(p => {
-            const price = parseFloat(p.bookingDetails?.price || 0);
-            const vName = p.bookingDetails?.vehicleName || "Unknown";
-            const vId = p.bookingDetails?.vehicleId;
-            const cat = categoryMap[vId] || "Standard";
-            
-            const date = p.createdAt ? new Date(p.createdAt) : new Date(parseInt(p._id.toString().substring(0, 8), 16) * 1000);
-            const month = date.toLocaleString('default', { month: 'short' });
+      delete updateData._id;
 
-            vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + price;
-            categoryRevenue[cat] = (categoryRevenue[cat] || 0) + price;
-            monthlyRevenue[month] = (monthlyRevenue[month] || 0) + price;
-        });
+      const updatedDoc = {
+        $set: {
+          ...updateData,
+        },
+      };
 
-        const vehicleChartData = Object.keys(vehicleRevenue).map(name => ({ name, value: vehicleRevenue[name] }));
-        const categoryChartData = Object.keys(categoryRevenue).map(name => ({ name, value: categoryRevenue[name] }));
-        const monthlyChartData = Object.keys(monthlyRevenue).map(name => ({ name, revenue: monthlyRevenue[name] }));
+      const result = await vehiclescollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
 
-        res.send({ vehicleChartData, categoryChartData, monthlyChartData });
-    } catch (error) {
-        res.status(500).send({ message: "Analytics load failed" });
+ app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
+  try {
+    const email = req.params.email.toLowerCase();
+
+   const payments = await paymentsCollection
+      .find({ "bookingDetails.hostEmail": email })
+      .toArray();
+
+    if (!payments || payments.length === 0) {
+      return res.send({ vehicleChartData: [], categoryChartData: [], monthlyChartData: [] });
     }
+
+    const hostVehicles = await vehiclescollection
+      .find({ userEmail: email })
+      .toArray();
+
+    const categoryMap = hostVehicles.reduce((acc, v) => {
+      acc[v._id.toString()] = v.categories || "Standard";
+      return acc;
+    }, {});
+
+    const vehicleRevenue = {};
+    const categoryRevenue = {};
+    const monthlyRevenue = {};
+
+    payments.forEach((p) => {
+      const amount = parseFloat(p.bookingDetails?.price || 0);
+      const adminFee = amount * 0.1; 
+      const netRevenue = amount - adminFee;
+      
+      const vId = p.bookingDetails?.vehicleId;
+      const vName = p.bookingDetails?.vehicleName || "Unknown";
+      const cat = categoryMap[vId] || "Standard";
+
+      const date = p.createdAt ? new Date(p.createdAt) : p._id.getTimestamp();
+      const month = date.toLocaleString("default", { month: "short" });
+
+      vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + netRevenue;
+      categoryRevenue[cat] = (categoryRevenue[cat] || 0) + netRevenue;
+      monthlyRevenue[month] = (monthlyRevenue[month] || 0) + netRevenue;
+    });
+
+    const vehicleChartData = Object.keys(vehicleRevenue).map((name) => ({
+      name,
+      value: Number(vehicleRevenue[name].toFixed(2)),
+    }));
+
+    const categoryChartData = Object.keys(categoryRevenue).map((name) => ({
+      name,
+      value: Number(categoryRevenue[name].toFixed(2)),
+    }));
+
+    const monthlyChartData = Object.keys(monthlyRevenue).map((name) => ({
+      name,
+      revenue: Number(monthlyRevenue[name].toFixed(2)),
+    }));
+
+    res.send({ vehicleChartData, categoryChartData, monthlyChartData });
+
+  } catch (error) {
+    console.error("Host Analytics Error:", error);
+    res.status(500).send({ message: "Host analytics load failed" });
+  }
 });
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
@@ -761,90 +789,219 @@ app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
       }
     });
 
-app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const query = { _id: new ObjectId(id) };
-  const result = await userscollection.deleteOne(query);
-  res.send(result);
-});
-
-app.patch("/users/status/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const { status } = req.body; 
-  const filter = { _id: new ObjectId(id) };
-  const updatedDoc = { $set: { status: status } };
-  const result = await userscollection.updateOne(filter, updatedDoc);
-  res.send(result);
-});
-
-app.get("/vehicles/pending", verifyToken, verifyAdmin, async (req, res) => {
-  const result = await vehiclescollection.find({ status: "pending" }).toArray();
-  res.send(result);
-});
-
-app.get("/vehicles/:id", verifyToken, async (req, res) => {
-  try {
-    const id = req.params.id;
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid ID format" });
-    }
-    const query = { _id: new ObjectId(id) };
-    const result = await vehiclescollection.findOne(query);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send(error);
-  }
-});
-
-app.patch("/vehicles/approve/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
-  
-  const filter = { _id: new ObjectId(id) };
-  const vehicle = await vehiclescollection.findOne(filter);
-  
-  if (!vehicle) return res.status(404).send("Vehicle not found");
-
-  const updateDoc = { $set: { status: "verified" } };
-  const result = await vehiclescollection.updateOne(filter, updateDoc);
-
-  if (result.modifiedCount > 0) {
-    await notificationsCollection.insertOne({
-      receiverEmail: vehicle.userEmail,
-      title: "Vehicle Verified! ✅",
-      message: `Your asset '${vehicle.vehicleName}' has been approved and is now live.`,
-      type: "system",
-      isRead: false,
-      timestamp: new Date(),
-      link: "/dashboard/my-listings",
+    app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await userscollection.deleteOne(query);
+      res.send(result);
     });
-  }
-  res.send(result);
-});
 
-app.delete("/vehicles/admin-delete/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
+    app.patch(
+      "/users/status/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const { status } = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = { $set: { status: status } };
+        const result = await userscollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      }
+    );
 
-  const filter = { _id: new ObjectId(id) };
-  const vehicle = await vehiclescollection.findOne(filter);
-  
-  if (!vehicle) return res.status(404).send("Vehicle not found");
-
-  const result = await vehiclescollection.deleteOne(filter);
-  
-  if (result.deletedCount > 0) {
-    await notificationsCollection.insertOne({
-      receiverEmail: vehicle.userEmail,
-      title: "Vehicle Rejected ❌",
-      message: `Your asset '${vehicle.vehicleName}' did not meet our standards.`,
-      type: "alert",
-      isRead: false,
-      timestamp: new Date(),
+    app.get("/vehicles/pending", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await vehiclescollection
+        .find({ status: "pending" })
+        .toArray();
+      res.send(result);
     });
-  }
-  res.send(result);
-});
+
+    app.get("/vehicles/:id", verifyToken, async (req, res) => {
+      try {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid ID format" });
+        }
+        const query = { _id: new ObjectId(id) };
+        const result = await vehiclescollection.findOne(query);
+        res.send(result);
+      } catch (error) {
+        res.status(500).send(error);
+      }
+    });
+
+    app.patch(
+      "/vehicles/approve/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
+
+        const filter = { _id: new ObjectId(id) };
+        const vehicle = await vehiclescollection.findOne(filter);
+
+        if (!vehicle) return res.status(404).send("Vehicle not found");
+
+        const updateDoc = { $set: { status: "verified" } };
+        const result = await vehiclescollection.updateOne(filter, updateDoc);
+
+        if (result.modifiedCount > 0) {
+          await notificationsCollection.insertOne({
+            receiverEmail: vehicle.userEmail,
+            title: "Vehicle Verified! ✅",
+            message: `Your asset '${vehicle.vehicleName}' has been approved and is now live.`,
+            type: "system",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/my-listings",
+          });
+        }
+        res.send(result);
+      }
+    );
+
+    app.delete(
+      "/vehicles/admin-delete/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
+
+        const filter = { _id: new ObjectId(id) };
+        const vehicle = await vehiclescollection.findOne(filter);
+
+        if (!vehicle) return res.status(404).send("Vehicle not found");
+
+        const result = await vehiclescollection.deleteOne(filter);
+
+        if (result.deletedCount > 0) {
+          await notificationsCollection.insertOne({
+            receiverEmail: vehicle.userEmail,
+            title: "Vehicle Rejected ❌",
+            message: `Your asset '${vehicle.vehicleName}' did not meet our standards.`,
+            type: "alert",
+            isRead: false,
+            timestamp: new Date(),
+          });
+        }
+        res.send(result);
+      }
+    );
+
+    app.get(
+      "/admin/all-bookings",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await bookingscollection
+          .find()
+          .sort({ requestDate: -1 })
+          .toArray();
+        res.send(result);
+      }
+    );
+
+    app.delete(
+      "/admin/bookings/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await bookingscollection.deleteOne(query);
+        res.send(result);
+      }
+    );
+
+    app.get(
+      "/admin-revenue-analytics",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const payments = await paymentsCollection.find().toArray();
+          const vehicles = await vehiclescollection.find().toArray();
+          const hosts = await userscollection.find({ role: "host" }).toArray();
+
+          const vehicleMap = vehicles.reduce((acc, v) => {
+            acc[v._id.toString()] = { cat: v.categories, brand: v.brand };
+            return acc;
+          }, {});
+
+          const COMMISSION_RATE = 0.1;
+          const monthlyTotal = {};
+          const monthlyAdmin = {};
+          const categoryMonthly = {};
+          const brandMonthly = {};
+          const hostLifetime = {};
+
+          payments.forEach((p) => {
+            const amount = parseFloat(p.bookingDetails?.price || 0);
+            const adminFee = amount * COMMISSION_RATE;
+            const hEmail = p.bookingDetails?.hostEmail;
+            const vId = p.bookingDetails?.vehicleId;
+            const vInfo = vehicleMap[vId] || {
+              cat: "Standard",
+              brand: "Other",
+            };
+
+            const date = p.createdAt
+              ? new Date(p.createdAt)
+              : p._id.getTimestamp();
+            const month = date.toLocaleString("default", { month: "short" });
+
+            monthlyTotal[month] = (monthlyTotal[month] || 0) + amount;
+            monthlyAdmin[month] = (monthlyAdmin[month] || 0) + adminFee;
+
+            const catKey = `${month}-${vInfo.cat}`;
+            categoryMonthly[catKey] = (categoryMonthly[catKey] || 0) + amount;
+
+            const brandKey = `${month}-${vInfo.brand}`;
+            brandMonthly[brandKey] = (brandMonthly[brandKey] || 0) + amount;
+
+            hostLifetime[hEmail] = (hostLifetime[hEmail] || 0) + amount;
+          });
+
+          const adminCommissionData = Object.keys(monthlyAdmin).map((m) => ({
+            month: m,
+            commission: monthlyAdmin[m],
+          }));
+          const totalRevenueData = Object.keys(monthlyTotal).map((m) => ({
+            month: m,
+            total: monthlyTotal[m],
+          }));
+
+          const catChartData = Object.keys(categoryMonthly).map((key) => ({
+            name: key.split("-")[1],
+            month: key.split("-")[0],
+            value: categoryMonthly[key],
+          }));
+
+          const brandChartData = Object.keys(brandMonthly).map((key) => ({
+            name: key.split("-")[1],
+            value: brandMonthly[key],
+          }));
+
+          const hostChartData = Object.keys(hostLifetime).map((email) => ({
+            host: email.split("@")[0],
+            revenue: hostLifetime[email],
+          }));
+
+          res.send({
+            adminCommissionData,
+            totalRevenueData,
+            catChartData,
+            brandChartData,
+            hostChartData,
+          });
+        } catch (error) {
+          res.status(500).send({ message: "Revenue load failed" });
+        }
+      }
+    );
     // --- NOTIFICATIONS SYSTEM ---
 
     app.get("/notifications/:email", verifyToken, async (req, res) => {
