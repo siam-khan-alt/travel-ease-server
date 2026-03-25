@@ -168,7 +168,7 @@ async function run() {
           const userNotif = {
             receiverEmail: user.email,
             title: "Role Updated!",
-            message: `Congratulations! Your account has been upgraded to ${role} level.`,
+            message: `Your account access level has been updated to '${role}'.`,
             type: "system",
             isRead: false,
             timestamp: new Date(),
@@ -355,12 +355,7 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
-    app.get("/vehicles/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await vehiclescollection.findOne(query);
-      res.send(result);
-    });
+    
     app.post("/vehicles", verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
       const result = await vehiclescollection.insertOne(newVehicle);
@@ -766,6 +761,90 @@ app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
       }
     });
 
+app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  const query = { _id: new ObjectId(id) };
+  const result = await userscollection.deleteOne(query);
+  res.send(result);
+});
+
+app.patch("/users/status/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  const { status } = req.body; 
+  const filter = { _id: new ObjectId(id) };
+  const updatedDoc = { $set: { status: status } };
+  const result = await userscollection.updateOne(filter, updatedDoc);
+  res.send(result);
+});
+
+app.get("/vehicles/pending", verifyToken, verifyAdmin, async (req, res) => {
+  const result = await vehiclescollection.find({ status: "pending" }).toArray();
+  res.send(result);
+});
+
+app.get("/vehicles/:id", verifyToken, async (req, res) => {
+  try {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid ID format" });
+    }
+    const query = { _id: new ObjectId(id) };
+    const result = await vehiclescollection.findOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send(error);
+  }
+});
+
+app.patch("/vehicles/approve/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
+  
+  const filter = { _id: new ObjectId(id) };
+  const vehicle = await vehiclescollection.findOne(filter);
+  
+  if (!vehicle) return res.status(404).send("Vehicle not found");
+
+  const updateDoc = { $set: { status: "verified" } };
+  const result = await vehiclescollection.updateOne(filter, updateDoc);
+
+  if (result.modifiedCount > 0) {
+    await notificationsCollection.insertOne({
+      receiverEmail: vehicle.userEmail,
+      title: "Vehicle Verified! ✅",
+      message: `Your asset '${vehicle.vehicleName}' has been approved and is now live.`,
+      type: "system",
+      isRead: false,
+      timestamp: new Date(),
+      link: "/dashboard/my-listings",
+    });
+  }
+  res.send(result);
+});
+
+app.delete("/vehicles/admin-delete/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  if (!ObjectId.isValid(id)) return res.status(400).send("Invalid ID");
+
+  const filter = { _id: new ObjectId(id) };
+  const vehicle = await vehiclescollection.findOne(filter);
+  
+  if (!vehicle) return res.status(404).send("Vehicle not found");
+
+  const result = await vehiclescollection.deleteOne(filter);
+  
+  if (result.deletedCount > 0) {
+    await notificationsCollection.insertOne({
+      receiverEmail: vehicle.userEmail,
+      title: "Vehicle Rejected ❌",
+      message: `Your asset '${vehicle.vehicleName}' did not meet our standards.`,
+      type: "alert",
+      isRead: false,
+      timestamp: new Date(),
+    });
+  }
+  res.send(result);
+});
     // --- NOTIFICATIONS SYSTEM ---
 
     app.get("/notifications/:email", verifyToken, async (req, res) => {
