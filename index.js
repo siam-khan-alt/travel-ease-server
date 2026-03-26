@@ -426,6 +426,39 @@ async function run() {
       res.send(result);
     });
 
+    // Statistics API
+app.get("/site-stats", async (req, res) => {
+  try {
+    const totalVehicles = await vehiclescollection.countDocuments({ status: "verified" });
+
+    const totalHappyCustomers = await paymentsCollection.countDocuments();
+
+    const totalSubscriptions = await newsletterCollection.countDocuments();
+
+    const reviewStats = await webReviewsCollection.aggregate([
+      { $match: { status: "approved" } },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 }
+        }
+      }
+    ]).toArray();
+
+    const avgRating = reviewStats.length > 0 ? reviewStats[0].averageRating.toFixed(1) : "0.0";
+
+    res.send({
+      totalVehicles,
+      totalHappyCustomers,
+      totalSubscriptions,
+      avgRating
+    });
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch stats" });
+  }
+});
+
     // --- Wishlist APIs ---
 
     app.patch("/wishlist/toggle", async (req, res) => {
