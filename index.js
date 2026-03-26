@@ -75,6 +75,7 @@ async function run() {
     const wishlistCollection = db.collection("wish");
     const reviewsCollection = db.collection("reviews");
     const promotionCollection = db.collection("promotion");
+    const webReviewsCollection= db.collection("web-reviews")
     // Verify
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
@@ -498,7 +499,7 @@ app.get("/active-promotion", async (req, res) => {
           type: "promo_expired",
           isRead: false,
           timestamp: new Date(),
-          link: "/dashboard/my-promotions",
+          link: "/",
         }
       ];
 
@@ -1293,7 +1294,7 @@ app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
             type: "success",
             isRead: false,
             timestamp: new Date(),
-            link: "/dashboard/my-promotions",
+            link: "/",
         });
     }
 
@@ -1321,6 +1322,100 @@ app.delete("/admin/reject-promo/:id", verifyToken, verifyAdmin, async (req, res)
     }
 
     res.send(result);
+});
+
+   // web review
+
+app.post("/web-reviews", verifyToken, async (req, res) => {
+  try {
+    const { email, text, rating } = req.body;
+
+    const userData = await userscollection.findOne({ email });
+    if (!userData) return res.status(404).send({ message: "User profile not found" });
+
+    const newReview = {
+      name: userData.name,
+      email: userData.email,
+      img: userData.photo || "https://i.pravatar.cc/150",
+      role: `Verified ${userData.role.charAt(0).toUpperCase() + userData.role.slice(1)}`,
+      text,
+      rating,
+      status: "pending",
+      createdAt: new Date()
+    };
+
+    const result = await webReviewsCollection.insertOne(newReview);
+
+    const admins = await userscollection
+      .find({ role: "admin" }, { projection: { email: 1 } })
+      .toArray();
+    
+    if (admins.length > 0) {
+      const adminNotifications = admins.map((admin) => ({
+        receiverEmail: admin.email,
+        title: "New Web Review!",
+        message: `${newReview.name} (${newReview.role}) gave a ${rating}-star review.`,
+        type: "admin_alert",
+        isRead: false,
+        timestamp: new Date(),
+        link: "/dashboard/manage-reviews",
+      }));
+      await notificationsCollection.insertMany(adminNotifications);
+    }
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+
+
+app.get("/web-reviews", verifyAdmin, async (req, res) => {
+  const result = await webReviewsCollection
+    .find()
+    .sort({ createdAt: -1 })
+    .toArray();
+  res.send(result);
+});
+
+app.get("/approved-reviews", verifyAdmin, async (req, res) => {
+  try {
+    const query = { status: "approved" };
+    const result = await webReviewsCollection
+      .find(query)
+      .sort({ createdAt: -1 }) 
+      .limit(12)              
+      .toArray();
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to fetch home reviews" });
+  }
+});
+app.patch("/web-reviews/:id", verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { status } = req.body;
+    const filter = { _id: new ObjectId(id) };
+    const updateDoc = {
+      $set: { status: status },
+    };
+    const result = await webReviewsCollection.updateOne(filter, updateDoc);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Update failed" });
+  }
+});
+
+app.delete("/web-reviews/:id", verifyAdmin, async (req, res) => {
+  try {
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+    const result = await webReviewsCollection.deleteOne(query);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Delete failed" });
+  }
 });
     // --- NOTIFICATIONS SYSTEM ---
 
