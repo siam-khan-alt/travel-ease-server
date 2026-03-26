@@ -1371,7 +1371,7 @@ app.post("/web-reviews", verifyToken, async (req, res) => {
 
 
 
-app.get("/web-reviews", verifyAdmin, async (req, res) => {
+app.get("/web-reviews",verifyToken, verifyAdmin, async (req, res) => {
   const result = await webReviewsCollection
     .find()
     .sort({ createdAt: -1 })
@@ -1379,7 +1379,7 @@ app.get("/web-reviews", verifyAdmin, async (req, res) => {
   res.send(result);
 });
 
-app.get("/approved-reviews", verifyAdmin, async (req, res) => {
+app.get("/approved-reviews", async (req, res) => {
   try {
     const query = { status: "approved" };
     const result = await webReviewsCollection
@@ -1392,7 +1392,7 @@ app.get("/approved-reviews", verifyAdmin, async (req, res) => {
     res.status(500).send({ message: "Failed to fetch home reviews" });
   }
 });
-app.patch("/web-reviews/:id", verifyAdmin, async (req, res) => {
+app.patch("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const { status } = req.body;
@@ -1407,7 +1407,7 @@ app.patch("/web-reviews/:id", verifyAdmin, async (req, res) => {
   }
 });
 
-app.delete("/web-reviews/:id", verifyAdmin, async (req, res) => {
+app.delete("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
   try {
     const id = req.params.id;
     const query = { _id: new ObjectId(id) };
