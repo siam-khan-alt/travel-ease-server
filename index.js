@@ -74,6 +74,7 @@ async function run() {
     const notificationsCollection = db.collection("notifications");
     const wishlistCollection = db.collection("wish");
     const reviewsCollection = db.collection("reviews");
+    const promotionCollection = db.collection("promotion");
     // Verify
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
@@ -318,33 +319,64 @@ async function run() {
       res.send({ paymentResult, bookingUpdateResult });
     });
 
-    app.get("/vehicles", async (req, res) => {
-      const { search, category, sortBy } = req.query;
-      let query = {};
-      if (search) {
-        query = {
-          $or: [
-            { vehicleName: { $regex: search, $options: "i" } },
-            {
-              category: { $regex: search, $options: "i" },
-            },
-            { location: { $regex: search, $options: "i" } },
+   app.get("/vehicles", async (req, res) => {
+  try {
+    const { search, category, sortBy } = req.query;
+    
+    let matchQuery = {}; 
+    
+    if (search) {
+      matchQuery.$or = [
+        { vehicleName: { $regex: search, $options: "i" } },
+        { categories: { $regex: search, $options: "i" } }, 
+        { location: { $regex: search, $options: "i" } },
+      ];
+    }
+    
+    if (category) {
+      matchQuery.categories = category;
+    }
+
+    let sortQuery = { _id: -1 }; 
+    if (sortBy === "price-asc") sortQuery = { pricePerDay: 1 };
+    else if (sortBy === "price-desc") sortQuery = { pricePerDay: -1 };
+
+    const result = await vehiclescollection.aggregate([
+      { $match: matchQuery },
+      {
+        $lookup: {
+          from: "promotion", 
+          let: { vId: { $toString: "$_id" } },
+          pipeline: [
+            { 
+              $match: { 
+                $expr: { 
+                  $and: [
+                    { $eq: ["$vehicleId", "$$vId"] }, 
+                    { $eq: ["$status", "approved"] }
+                  ]
+                }
+              }
+            }
           ],
-        };
-      }
-      if (category) {
-        query.categories = category;
-      }
+          as: "activePromo"
+        }
+      },
+      {
+        $addFields: {
+          promo: { $arrayElemAt: ["$activePromo", 0] }
+        }
+      },
+      { $project: { activePromo: 0 } },
+      { $sort: sortQuery }
+    ]).toArray();
 
-      let sortQuery = {};
-      if (sortBy === "price-asc") sortQuery = { pricePerDay: 1 };
-      else if (sortBy === "price-desc") sortQuery = { pricePerDay: -1 };
-
-      const cursor = vehiclescollection.find(query).sort(sortQuery);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
-
+    res.send(result);
+  } catch (error) {
+    console.error("Aggregation Error:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
     app.get("/vehicles/latest", async (req, res) => {
       const cursor = vehiclescollection.find().sort({ createdAt: -1 }).limit(4);
       const result = await cursor.toArray();
@@ -439,6 +471,11 @@ async function run() {
         .toArray();
       res.send(result);
     });
+
+   app.get("/active-promotion", async (req, res) => {
+    const result = await promotionCollection.findOne({ status: "approved" });
+    res.send(result || {});
+});
 
     // user dashboard
 
@@ -848,6 +885,44 @@ async function run() {
         }
       }
     );
+
+app.post(
+  "/request-promotion",
+  verifyToken,
+  verifyHost,
+  async (req, res) => {
+    const promoData = req.body;
+    
+    const result = await promotionCollection.insertOne({
+      ...promoData,
+      status: "pending",
+      createdAt: new Date(),
+    });
+
+    if (result.insertedId) {
+      const admins = await userscollection
+        .find({ role: "admin" }, { projection: { email: 1 } })
+        .toArray();
+      const adminEmails = admins.map((admin) => admin.email);
+
+      const adminNotifications = adminEmails.map((email) => ({
+        receiverEmail: email, 
+        title: "New Promotion Request! 🚀",
+        message: `Host ${promoData.hostEmail} has requested a promotion for '${promoData.vehicleName}'.`,
+        type: "admin_alert",
+        isRead: false,
+        timestamp: new Date(),
+        link: "/dashboard/manage-promotions",
+      }));
+
+      if (adminNotifications.length > 0) {
+        await notificationsCollection.insertMany(adminNotifications);
+      }
+    }
+
+    res.send(result);
+  }
+);
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
       try {
@@ -923,10 +998,39 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ message: "Invalid ID format" });
         }
-        const query = { _id: new ObjectId(id) };
-        const result = await vehiclescollection.findOne(query);
-        res.send(result);
-      } catch (error) {
+        const result = await vehiclescollection.aggregate([
+      { $match: { _id: new ObjectId(id) } },
+      {
+        $lookup: {
+          from: "promotion", 
+          let: { vId: { $toString: "$_id" } },
+          pipeline: [
+            { 
+              $match: { 
+                $expr: { 
+                  $and: [
+                    { $eq: ["$vehicleId", "$$vId"] }, 
+                    { $eq: ["$status", "approved"] } 
+                  ]
+                }
+              }
+            }
+          ],
+          as: "activePromo"
+        }
+      },
+      {
+        $addFields: {
+          promo: { $arrayElemAt: ["$activePromo", 0] } 
+        }
+      },
+      { $project: { activePromo: 0 } } 
+    ]).toArray();
+
+    if (result.length === 0) return res.status(404).send({ message: "Not found" });
+    
+    res.send(result[0]);
+  } catch (error) {
         res.status(500).send(error);
       }
     });
@@ -1102,6 +1206,60 @@ async function run() {
         }
       }
     );
+app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
+    const result = await promotionCollection.find().sort({ createdAt: -1 }).toArray();
+    res.send(result);
+});
+
+   app.patch("/admin/approve-promo/:id", verifyToken, verifyAdmin, async (req, res) => {
+    const id = req.params.id;
+    const filter = { _id: new ObjectId(id) };
+
+    const promo = await promotionCollection.findOne(filter);
+    if (!promo) return res.status(404).send({ message: "Promotion not found" });
+
+    await promotionCollection.updateMany({ status: 'approved' }, { $set: { status: 'expired' } }); 
+
+    const updateDoc = { $set: { status: 'approved' } };
+    const result = await promotionCollection.updateOne(filter, updateDoc);
+
+    if (result.modifiedCount > 0) {
+        await notificationsCollection.insertOne({
+            receiverEmail: promo.hostEmail,
+            title: "Promotion Approved! 🔥",
+            message: `Good news! Your promotion for '${promo.vehicleName}' is now live on the home banner.`,
+            type: "success",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/my-promotions",
+        });
+    }
+
+    res.send(result);
+});
+
+app.delete("/admin/reject-promo/:id", verifyToken, verifyAdmin, async (req, res) => {
+    const id = req.params.id;
+    const filter = { _id: new ObjectId(id) };
+
+    const promo = await promotionCollection.findOne(filter);
+    if (!promo) return res.status(404).send({ message: "Promotion not found" });
+
+    const result = await promotionCollection.deleteOne(filter);
+
+    if (result.deletedCount > 0) {
+        await notificationsCollection.insertOne({
+            receiverEmail: promo.hostEmail,
+            title: "Promotion Rejected ⚠️",
+            message: `Your promotion request for '${promo.vehicleName}' was not approved by admin.`,
+            type: "alert",
+            isRead: false,
+            timestamp: new Date(),
+        });
+    }
+
+    res.send(result);
+});
     // --- NOTIFICATIONS SYSTEM ---
 
     app.get("/notifications/:email", verifyToken, async (req, res) => {
