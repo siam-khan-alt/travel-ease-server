@@ -472,9 +472,71 @@ async function run() {
       res.send(result);
     });
 
-   app.get("/active-promotion", async (req, res) => {
-    const result = await promotionCollection.findOne({ status: "approved" });
-    res.send(result || {});
+app.get("/active-promotion", async (req, res) => {
+  try {
+    const now = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const expiredPromo = await promotionCollection.findOne({
+      status: "approved",
+      createdAt: { $lt: sevenDaysAgo },
+      isExpiryNotified: { $ne: true } 
+    });
+
+    if (expiredPromo) {
+      const admins = await userscollection
+        .find({ role: "admin" }, { projection: { email: 1 } })
+        .toArray();
+      const adminEmails = admins.map((admin) => admin.email);
+
+      const expiryNotifications = [
+        {
+          receiverEmail: expiredPromo.hostEmail,
+          title: "Promotion Expired!",
+          message: `Your special offer for ${expiredPromo.vehicleName} has ended after 7 days.`,
+          type: "promo_expired",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/my-promotions",
+        }
+      ];
+
+      adminEmails.forEach((email) => {
+        expiryNotifications.push({
+          receiverEmail: email,
+          title: "Promo Ended",
+          message: `The promotion for ${expiredPromo.vehicleName} by ${expiredPromo.hostEmail} has expired.`,
+          type: "admin_alert",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/manage-promotions",
+        });
+      });
+
+      await notificationsCollection.insertMany(expiryNotifications);
+
+      await promotionCollection.updateOne(
+        { _id: expiredPromo._id },
+        { $set: { isExpiryNotified: true, status: "expired" } }
+      );
+    }
+
+    const result = await promotionCollection
+      .find({
+        status: "approved",
+        createdAt: { $gte: sevenDaysAgo }
+      })
+      .sort({ createdAt: -1 })
+      .limit(1)
+      .toArray();
+
+    res.send(result[0] || {});
+
+  } catch (error) {
+    console.error("Promo Fetch & Expiry Error:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
 });
 
     // user dashboard
