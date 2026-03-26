@@ -72,7 +72,8 @@ async function run() {
     const newsletterCollection = db.collection("newsletter");
     const paymentsCollection = db.collection("payments");
     const notificationsCollection = db.collection("notifications");
-
+    const wishlistCollection = db.collection("wish");
+    const reviewsCollection = db.collection("reviews");
     // Verify
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
@@ -392,6 +393,53 @@ async function run() {
       res.send(result);
     });
 
+    // --- Wishlist APIs ---
+
+    app.patch("/wishlist/toggle", async (req, res) => {
+      const { vehicleId, userEmail, action } = req.body;
+      const vQuery = { _id: new ObjectId(vehicleId) };
+
+      try {
+        const updateDoc = {
+          $inc: { wish: action === "add" ? 1 : -1 },
+        };
+        await vehiclescollection.updateOne(vQuery, updateDoc);
+
+        if (userEmail) {
+          if (action === "add") {
+            const wishDoc = { vehicleId, userEmail, addedAt: new Date() };
+            await wishlistCollection.insertOne(wishDoc);
+          } else {
+            await wishlistCollection.deleteOne({ vehicleId, userEmail });
+          }
+        }
+
+        res.send({ success: true, message: `Wishlist ${action} successful` });
+      } catch (err) {
+        res.status(500).send({ message: err.message });
+      }
+    });
+
+    app.get("/my-wishlist/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const result = await wishlistCollection
+        .find({ userEmail: email })
+        .toArray();
+      res.send(result);
+    });
+
+    app.get("/wishlist-items/:email", verifyToken, async (req, res) => {
+      const email = req.params.email;
+      const wishItems = await wishlistCollection
+        .find({ userEmail: email })
+        .toArray();
+      const vehicleIds = wishItems.map((item) => new ObjectId(item.vehicleId));
+      const result = await vehiclescollection
+        .find({ _id: { $in: vehicleIds } })
+        .toArray();
+      res.send(result);
+    });
+
     // user dashboard
 
     app.post("/bookings", verifyToken, async (req, res) => {
@@ -536,6 +584,52 @@ async function run() {
       }
     });
 
+    app.post("/reviews", verifyToken, async (req, res) => {
+      const review = req.body;
+      const hasBooked = await bookingscollection.findOne({
+        vehicleId: review.vehicleId,
+        userEmail: review.userEmail,
+        status: { $in: ["Accepted", "Paid"] },
+      });
+
+      if (!hasBooked) {
+        return res
+          .status(403)
+          .send({ message: "Only confirmed guests can leave a review!" });
+      }
+
+      const reviewData = { ...review, createdAt: new Date() };
+      await reviewsCollection.insertOne(reviewData);
+
+      const vehicleId = new ObjectId(review.vehicleId);
+      const vehicle = await vehiclesCollection.findOne({ _id: vehicleId });
+
+      const newTotalStars = (vehicle.totalStars || 0) + review.rating;
+      const newTotalReviews = (vehicle.totalReviews || 0) + 1;
+      const newAvgRating = (newTotalStars / newTotalReviews).toFixed(1);
+
+      await vehiclesCollection.updateOne(
+        { _id: vehicleId },
+        {
+          $set: {
+            totalStars: newTotalStars,
+            totalReviews: newTotalReviews,
+            ratings: parseFloat(newAvgRating),
+          },
+        }
+      );
+
+      res.send({ success: true, message: "Review published!" });
+    });
+
+    app.get("/reviews/:vehicleId", async (req, res) => {
+      const result = await reviewsCollection
+        .find({ vehicleId: req.params.vehicleId })
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
     // --- Host Dashboard ---
     app.patch(
       "/bookings/accept/:id",
@@ -583,30 +677,20 @@ async function run() {
             userEmail: email,
           });
 
-          const hostVehicles = await vehiclescollection
-            .find(
-              { userEmail: email },
-              { projection: { _id: 1, vehicleName: 1 } }
-            )
-            .toArray();
-          const vehicleIds = hostVehicles.map((v) => v._id.toString());
-
           const hostPayments = await paymentsCollection
-            .find({
-              "bookingDetails.vehicleId": { $in: vehicleIds },
-            })
+            .find({ "bookingDetails.hostEmail": email })
             .toArray();
 
-          const totalRevenue = hostPayments.reduce(
-            (sum, p) => sum + parseFloat(p.bookingDetails?.price || 0),
-            0
-          );
+          const totalNetRevenue = hostPayments.reduce((sum, p) => {
+            const amount = parseFloat(p.bookingDetails?.price || 0);
+            const netRevenue = amount * 0.9;
+            return sum + netRevenue;
+          }, 0);
+
           const totalBookings = hostPayments.length;
 
           const recentActivity = await bookingscollection
-            .find({
-              vehicleId: { $in: vehicleIds },
-            })
+            .find({ hostEmail: email })
             .sort({ _id: -1 })
             .limit(5)
             .toArray();
@@ -615,17 +699,21 @@ async function run() {
             stats: {
               totalVehicles,
               totalBookings,
-              totalRevenue: totalRevenue.toFixed(2),
-              activeAssets: hostVehicles.length,
+              totalRevenue: totalNetRevenue.toFixed(2),
+              activeAssets: totalVehicles,
             },
             recentActivity,
-            chartData: hostPayments.map((p) => ({
-              name: p.bookingDetails?.vehicleName?.split(" ")[0],
-              price: p.bookingDetails?.price,
-              date: p.transactionId?.slice(-5),
-            })),
+            chartData: hostPayments.map((p) => {
+              const amount = parseFloat(p.bookingDetails?.price || 0);
+              return {
+                name: p.bookingDetails?.vehicleName?.split(" ")[0] || "Vehicle",
+                price: Number((amount * 0.9).toFixed(2)),
+                date: p.transactionId?.slice(-5),
+              };
+            }),
           });
         } catch (err) {
+          console.error("Overview Error:", err);
           res.status(500).send({ message: "Host Stats Load Failed" });
         }
       }
@@ -684,70 +772,82 @@ async function run() {
       res.send(result);
     });
 
- app.get("/host-analytics/:email", verifyToken, verifyHost, async (req, res) => {
-  try {
-    const email = req.params.email.toLowerCase();
+    app.get(
+      "/host-analytics/:email",
+      verifyToken,
+      verifyHost,
+      async (req, res) => {
+        try {
+          const email = req.params.email.toLowerCase();
 
-   const payments = await paymentsCollection
-      .find({ "bookingDetails.hostEmail": email })
-      .toArray();
+          const payments = await paymentsCollection
+            .find({ "bookingDetails.hostEmail": email })
+            .toArray();
 
-    if (!payments || payments.length === 0) {
-      return res.send({ vehicleChartData: [], categoryChartData: [], monthlyChartData: [] });
-    }
+          if (!payments || payments.length === 0) {
+            return res.send({
+              vehicleChartData: [],
+              categoryChartData: [],
+              monthlyChartData: [],
+            });
+          }
 
-    const hostVehicles = await vehiclescollection
-      .find({ userEmail: email })
-      .toArray();
+          const hostVehicles = await vehiclescollection
+            .find({ userEmail: email })
+            .toArray();
 
-    const categoryMap = hostVehicles.reduce((acc, v) => {
-      acc[v._id.toString()] = v.categories || "Standard";
-      return acc;
-    }, {});
+          const categoryMap = hostVehicles.reduce((acc, v) => {
+            acc[v._id.toString()] = v.categories || "Standard";
+            return acc;
+          }, {});
 
-    const vehicleRevenue = {};
-    const categoryRevenue = {};
-    const monthlyRevenue = {};
+          const vehicleRevenue = {};
+          const categoryRevenue = {};
+          const monthlyRevenue = {};
 
-    payments.forEach((p) => {
-      const amount = parseFloat(p.bookingDetails?.price || 0);
-      const adminFee = amount * 0.1; 
-      const netRevenue = amount - adminFee;
-      
-      const vId = p.bookingDetails?.vehicleId;
-      const vName = p.bookingDetails?.vehicleName || "Unknown";
-      const cat = categoryMap[vId] || "Standard";
+          payments.forEach((p) => {
+            const amount = parseFloat(p.bookingDetails?.price || 0);
+            const adminFee = amount * 0.1;
+            const netRevenue = amount - adminFee;
 
-      const date = p.createdAt ? new Date(p.createdAt) : p._id.getTimestamp();
-      const month = date.toLocaleString("default", { month: "short" });
+            const vId = p.bookingDetails?.vehicleId;
+            const vName = p.bookingDetails?.vehicleName || "Unknown";
+            const cat = categoryMap[vId] || "Standard";
 
-      vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + netRevenue;
-      categoryRevenue[cat] = (categoryRevenue[cat] || 0) + netRevenue;
-      monthlyRevenue[month] = (monthlyRevenue[month] || 0) + netRevenue;
-    });
+            const date = p.createdAt
+              ? new Date(p.createdAt)
+              : p._id.getTimestamp();
+            const month = date.toLocaleString("default", { month: "short" });
 
-    const vehicleChartData = Object.keys(vehicleRevenue).map((name) => ({
-      name,
-      value: Number(vehicleRevenue[name].toFixed(2)),
-    }));
+            vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + netRevenue;
+            categoryRevenue[cat] = (categoryRevenue[cat] || 0) + netRevenue;
+            monthlyRevenue[month] = (monthlyRevenue[month] || 0) + netRevenue;
+          });
 
-    const categoryChartData = Object.keys(categoryRevenue).map((name) => ({
-      name,
-      value: Number(categoryRevenue[name].toFixed(2)),
-    }));
+          const vehicleChartData = Object.keys(vehicleRevenue).map((name) => ({
+            name,
+            value: Number(vehicleRevenue[name].toFixed(2)),
+          }));
 
-    const monthlyChartData = Object.keys(monthlyRevenue).map((name) => ({
-      name,
-      revenue: Number(monthlyRevenue[name].toFixed(2)),
-    }));
+          const categoryChartData = Object.keys(categoryRevenue).map(
+            (name) => ({
+              name,
+              value: Number(categoryRevenue[name].toFixed(2)),
+            })
+          );
 
-    res.send({ vehicleChartData, categoryChartData, monthlyChartData });
+          const monthlyChartData = Object.keys(monthlyRevenue).map((name) => ({
+            name,
+            revenue: Number(monthlyRevenue[name].toFixed(2)),
+          }));
 
-  } catch (error) {
-    console.error("Host Analytics Error:", error);
-    res.status(500).send({ message: "Host analytics load failed" });
-  }
-});
+          res.send({ vehicleChartData, categoryChartData, monthlyChartData });
+        } catch (error) {
+          console.error("Host Analytics Error:", error);
+          res.status(500).send({ message: "Host analytics load failed" });
+        }
+      }
+    );
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
       try {
