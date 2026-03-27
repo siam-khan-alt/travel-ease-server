@@ -324,7 +324,7 @@ async function run() {
   try {
     const { search, category, sortBy } = req.query;
     
-    let matchQuery = {}; 
+    let matchQuery = { status: "verified" };
     
     if (search) {
       matchQuery.$or = [
@@ -341,6 +341,7 @@ async function run() {
     let sortQuery = { _id: -1 }; 
     if (sortBy === "price-asc") sortQuery = { pricePerDay: 1 };
     else if (sortBy === "price-desc") sortQuery = { pricePerDay: -1 };
+    else if (sortBy === "rating") sortQuery = { ratings: -1 };
 
     const result = await vehiclescollection.aggregate([
       { $match: matchQuery },
@@ -365,7 +366,8 @@ async function run() {
       },
       {
         $addFields: {
-          promo: { $arrayElemAt: ["$activePromo", 0] }
+          promo: { $arrayElemAt: ["$activePromo", 0] },
+          ratings: { $ifNull: ["$ratings", 0] }
         }
       },
       { $project: { activePromo: 0 } },
@@ -378,19 +380,40 @@ async function run() {
     res.status(500).send({ message: "Internal Server Error" });
   }
 });
-    app.get("/vehicles/latest", async (req, res) => {
-      const cursor = vehiclescollection.find().sort({ createdAt: -1 }).limit(4);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
+    
     app.get("/vehicles/top", async (req, res) => {
-      const cursor = vehiclescollection
-        .find()
-        .sort({ bookingCount: -1 })
-        .limit(4);
-      const result = await cursor.toArray();
-      res.send(result);
-    });
+  try {
+    const result = await vehiclescollection.aggregate([
+      { $match: { status: "verified" } },
+      { $sort: { bookingCount: -1 } },
+      { $limit: 4 },
+      {
+        $lookup: {
+          from: "promotion",
+          let: { vId: { $toString: "$_id" } },
+          pipeline: [
+            { $match: { $expr: { $and: [
+              { $eq: ["$vehicleId", "$$vId"] },
+              { $eq: ["$status", "approved"] }
+            ] } } }
+          ],
+          as: "activePromo"
+        }
+      },
+      {
+        $addFields: {
+          promo: { $arrayElemAt: ["$activePromo", 0] },
+          ratings: { $ifNull: ["$ratings", 0] }
+        }
+      },
+      { $project: { activePromo: 0 } }
+    ]).toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Error fetching top vehicles" });
+  }
+});
 
     app.post("/vehicles", verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
@@ -662,20 +685,15 @@ app.get("/active-promotion", async (req, res) => {
           .limit(5)
           .toArray();
 
-        const favoriteCategory = await bookingscollection
-          .aggregate([
-            { $match: { userEmail: email } },
-            { $group: { _id: "$category", count: { $sum: 1 } } },
-            { $sort: { count: -1 } },
-            { $limit: 1 },
-          ])
-          .toArray();
+        const wishlistCount = await wishlistCollection.countDocuments({
+      userEmail: email,
+    });
 
         res.send({
           stats: {
             totalBookings,
             totalSpent: totalSpent.toFixed(2),
-            favCategory: favoriteCategory[0]?._id || "None",
+            wishlistCount,
           },
           recentActivity,
         });
@@ -718,43 +736,45 @@ app.get("/active-promotion", async (req, res) => {
     });
 
     app.post("/reviews", verifyToken, async (req, res) => {
-      const review = req.body;
-      const hasBooked = await bookingscollection.findOne({
-        vehicleId: review.vehicleId,
-        userEmail: review.userEmail,
-        status: { $in: ["Accepted", "Paid"] },
-      });
+  const review = req.body;
+  const vehicleId = new ObjectId(review.vehicleId);
 
-      if (!hasBooked) {
-        return res
-          .status(403)
-          .send({ message: "Only confirmed guests can leave a review!" });
-      }
-
-      const reviewData = { ...review, createdAt: new Date() };
-      await reviewsCollection.insertOne(reviewData);
-
-      const vehicleId = new ObjectId(review.vehicleId);
-      const vehicle = await vehiclescollection.findOne({ _id: vehicleId });
-
-      const newTotalStars = (vehicle.totalStars || 0) + review.rating;
-      const newTotalReviews = (vehicle.totalReviews || 0) + 1;
-      const newAvgRating = (newTotalStars / newTotalReviews).toFixed(1);
-
-      await vehiclesCollection.updateOne(
-        { _id: vehicleId },
-        {
-          $set: {
-            totalStars: newTotalStars,
-            totalReviews: newTotalReviews,
-            ratings: parseFloat(newAvgRating),
-          },
-        }
-      );
-
-      res.send({ success: true, message: "Review published!" });
+  try {
+    const hasBooked = await bookingscollection.findOne({
+      vehicleId: review.vehicleId,
+      userEmail: review.userEmail,
+      status: { $in: ["Accepted", "Paid"] },
     });
 
+    if (!hasBooked) {
+      return res.status(403).send({ message: "Only confirmed guests can leave a review!" });
+    }
+
+    const reviewData = { ...review, createdAt: new Date() };
+    await reviewsCollection.insertOne(reviewData);
+
+    const vehicle = await vehiclescollection.findOne({ _id: vehicleId });
+    
+    const newTotalStars = (vehicle.totalStars || 0) + parseInt(review.rating);
+    const newTotalReviews = (vehicle.totalReviews || 0) + 1;
+    const newAvgRating = parseFloat((newTotalStars / newTotalReviews).toFixed(1));
+
+    await vehiclescollection.updateOne(
+      { _id: vehicleId },
+      {
+        $set: {
+          totalStars: newTotalStars,
+          totalReviews: newTotalReviews,
+          ratings: newAvgRating,
+        },
+      }
+    );
+
+    res.send({ success: true, message: "Review published!" });
+  } catch (error) {
+    res.status(500).send({ message: "Error posting review" });
+  }
+});
     app.get("/reviews/:vehicleId", async (req, res) => {
       const result = await reviewsCollection
         .find({ vehicleId: req.params.vehicleId })
@@ -1487,6 +1507,7 @@ app.delete("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
         res.send(result);
       }
     );
+    
   } finally {
   }
 }
