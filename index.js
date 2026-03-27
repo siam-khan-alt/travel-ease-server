@@ -76,6 +76,7 @@ async function run() {
     const reviewsCollection = db.collection("reviews");
     const promotionCollection = db.collection("promotion");
     const webReviewsCollection= db.collection("web-reviews")
+    const contactscollection = db.collection("contacts")
     // Verify
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
@@ -1485,6 +1486,71 @@ app.delete("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
   } catch (error) {
     res.status(500).send({ message: "Delete failed" });
   }
+});
+
+
+
+// contacts
+app.post("/contacts", async (req, res) => {
+  try {
+    const contactData = {
+      ...req.body,
+      status: "pending",
+      createdAt: new Date(),
+    };
+
+    const result = await contactscollection.insertOne(contactData);
+
+    if (result.insertedId) {
+      const admins = await userscollection
+        .find({ role: "admin" }, { projection: { email: 1 } })
+        .toArray();
+
+      const adminNotifs = admins.map((admin) => ({
+        receiverEmail: admin.email,
+        title: "New Inquiry Received!",
+        message: `New message from ${contactData.name}: "${contactData.subject}"`,
+        type: "admin_alert",
+        isRead: false,
+        timestamp: new Date(),
+        link: "/dashboard/manage-contacts", 
+      }));
+
+      if (adminNotifs.length > 0) {
+        await notificationsCollection.insertMany(adminNotifs);
+      }
+    }
+
+    res.send({
+      success: true,
+      message: "Message sent and admin notified!",
+      insertedId: result.insertedId,
+    });
+
+  } catch (error) {
+    console.error("Contact API Error:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
+
+app.get("/admin/contacts", verifyToken, verifyAdmin, async (req, res) => {
+  const result = await contactscollection.find().sort({ createdAt: -1 }).toArray();
+  res.send(result);
+});
+
+app.delete("/admin/contacts/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  const result = await contactscollection.deleteOne({ _id: new ObjectId(id) });
+  res.send(result);
+});
+
+app.patch("/admin/contacts/replied/:id", verifyToken, verifyAdmin, async (req, res) => {
+  const id = req.params.id;
+  const result = await contactscollection.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: { status: "replied" } }
+  );
+  res.send(result);
 });
     // --- NOTIFICATIONS SYSTEM ---
 
