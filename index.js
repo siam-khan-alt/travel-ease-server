@@ -648,11 +648,31 @@ app.get("/active-promotion", async (req, res) => {
     });
 
     app.get("/booking-details/:id", verifyToken, async (req, res) => {
-      const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await bookingscollection.findOne(query);
-      res.send(result);
-    });
+      try {
+    const id = req.params.id;
+    
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({ message: "Invalid Booking ID" });
+    }
+
+    const query = { _id: new ObjectId(id) };
+    const result = await bookingscollection.findOne(query);
+
+    if (!result) {
+      return res.status(404).send({ message: "Booking not found" });
+    }
+
+    const userEmail = req.tokenEmail; 
+    if (result.userEmail !== userEmail && result.hostEmail !== userEmail) {
+      return res.status(403).send({ message: "Access Denied! This is not your booking." });
+    }
+
+    res.send(result);
+  } catch (error) {
+    console.error("Booking Details Error:", error);
+    res.status(500).send({ message: "Internal Server Error" });
+  }
+});
 
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
@@ -661,23 +681,15 @@ app.get("/active-promotion", async (req, res) => {
       }
 
       try {
-        const totalBookings = await bookingscollection.countDocuments({
-          userEmail: email,
-        });
-        const payments = await paymentsCollection
-          .find({ "bookingDetails.userEmail": email })
-          .toArray();
-        if (payments.length > 0) {
-          console.log(
-            "First Payment Price Path:",
-            payments[0].bookingDetails?.price
-          );
-        }
+        const paidBookings = await bookingscollection.find({ userEmail: email, status: "Paid" })
+      .toArray();
 
-        const totalSpent = payments.reduce((sum, p) => {
-          const price = parseFloat(p.bookingDetails?.price || 0);
-          return sum + price;
-        }, 0);
+       const totalSpent = paidBookings.reduce((sum, b) => {
+      const price = parseFloat(b.price || 0);
+      return sum + price;
+    }, 0);
+
+    const totalBookingsCount = paidBookings.length;
 
         const recentActivity = await bookingscollection
           .find({ userEmail: email })
@@ -691,7 +703,7 @@ app.get("/active-promotion", async (req, res) => {
 
         res.send({
           stats: {
-            totalBookings,
+            totalBookings:totalBookingsCount,
             totalSpent: totalSpent.toFixed(2),
             wishlistCount,
           },
@@ -704,6 +716,7 @@ app.get("/active-promotion", async (req, res) => {
     });
 
     app.get("/bookings", verifyToken, async (req, res) => {
+      try {
       const email = req.query.email.toLowerCase();
 
       if (req.tokenEmail !== email) {
@@ -711,9 +724,13 @@ app.get("/active-promotion", async (req, res) => {
       }
 
       const query = { userEmail: email };
-      const result = await bookingscollection.find(query).toArray();
+      const result = await bookingscollection.find(query).sort({ _id: -1 }).toArray();
       res.send(result);
-    });
+    } catch (error) {
+    console.error("Fetch Bookings Error:", error);
+    res.status(500).send({ message: "Failed to load bookings" });
+  }
+});
 
     app.get("/payments/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
@@ -830,38 +847,37 @@ app.get("/active-promotion", async (req, res) => {
             userEmail: email,
           });
 
-          const hostPayments = await paymentsCollection
-            .find({ "bookingDetails.hostEmail": email })
-            .toArray();
-
-          const totalNetRevenue = hostPayments.reduce((sum, p) => {
-            const amount = parseFloat(p.bookingDetails?.price || 0);
+          const paidBookings = await bookingscollection
+      .find({ hostEmail: email, status: "Paid" })
+      .toArray();
+          const totalNetRevenue = paidBookings.reduce((sum, b) => {
+            const amount = parseFloat(b.price || 0);
             const netRevenue = amount * 0.9;
             return sum + netRevenue;
           }, 0);
 
-          const totalBookings = hostPayments.length;
+          const totalBookingsCount = paidBookings.length;
 
           const recentActivity = await bookingscollection
             .find({ hostEmail: email })
-            .sort({ _id: -1 })
+            .sort({ requestDate: -1 })
             .limit(5)
             .toArray();
 
           res.send({
             stats: {
               totalVehicles,
-              totalBookings,
+              totalBookings:totalBookingsCount,
               totalRevenue: totalNetRevenue.toFixed(2),
               activeAssets: totalVehicles,
             },
             recentActivity,
-            chartData: hostPayments.map((p) => {
-              const amount = parseFloat(p.bookingDetails?.price || 0);
+            chartData: paidBookings.map((b) => {
+              const amount = parseFloat(b.price || 0);
               return {
-                name: p.bookingDetails?.vehicleName?.split(" ")[0] || "Vehicle",
-                price: Number((amount * 0.9).toFixed(2)),
-                date: p.transactionId?.slice(-5),
+                name: b.vehicleName?.split(" ")[0] || "Vehicle",
+                revenue: Number((amount * 0.9).toFixed(2)),
+                date:b.paidAt ? new Date(b.paidAt).toLocaleDateString() : "N/A",
               };
             }),
           });
@@ -1044,7 +1060,7 @@ app.post(
       try {
         const totalUsers = await userscollection.countDocuments();
         const totalVehicles = await vehiclescollection.countDocuments();
-        const totalBookings = await bookingscollection.countDocuments();
+        const totalBookings = await bookingscollection.countDocuments({ status: "Paid" });
         const totalSubscribers = await newsletterCollection.countDocuments();
 
         const allPayments = await paymentsCollection.find().toArray();
@@ -1217,7 +1233,7 @@ app.post(
       verifyAdmin,
       async (req, res) => {
         const result = await bookingscollection
-          .find()
+          .find({ status: "Paid" })
           .sort({ requestDate: -1 })
           .toArray();
         res.send(result);
