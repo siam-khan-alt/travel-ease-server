@@ -735,7 +735,7 @@ app.get("/active-promotion", async (req, res) => {
       await reviewsCollection.insertOne(reviewData);
 
       const vehicleId = new ObjectId(review.vehicleId);
-      const vehicle = await vehiclesCollection.findOne({ _id: vehicleId });
+      const vehicle = await vehiclescollection.findOne({ _id: vehicleId });
 
       const newTotalStars = (vehicle.totalStars || 0) + review.rating;
       const newTotalReviews = (vehicle.totalReviews || 0) + 1;
@@ -1088,7 +1088,7 @@ app.post(
       res.send(result);
     });
 
-    app.get("/vehicles/:id", verifyToken, async (req, res) => {
+    app.get("/vehicles/:id",  async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
