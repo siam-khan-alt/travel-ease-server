@@ -75,8 +75,8 @@ async function run() {
     const wishlistCollection = db.collection("wish");
     const reviewsCollection = db.collection("reviews");
     const promotionCollection = db.collection("promotion");
-    const webReviewsCollection= db.collection("web-reviews")
-    const contactscollection = db.collection("contacts")
+    const webReviewsCollection = db.collection("web-reviews");
+    const contactscollection = db.collection("contacts");
     // Verify
     const verifyAdmin = async (req, res, next) => {
       const email = req.tokenEmail;
@@ -308,7 +308,7 @@ async function run() {
         notifications.push({
           receiverEmail: email,
           title: "New Transaction",
-          message: `A payment of $${payment.bookingDetails.price} was received from ${payment.bookingDetails.userEmail}.`,
+          message: `A payment of $${payment.bookingDetails.totalPrice} was received from ${payment.bookingDetails.userEmail}.`,
           type: "admin_alert",
           isRead: false,
           timestamp: new Date(),
@@ -321,100 +321,110 @@ async function run() {
       res.send({ paymentResult, bookingUpdateResult });
     });
 
-   app.get("/vehicles", async (req, res) => {
-  try {
-    const { search, category, sortBy } = req.query;
-    
-    let matchQuery = { status: "verified" };
-    
-    if (search) {
-      matchQuery.$or = [
-        { vehicleName: { $regex: search, $options: "i" } },
-        { categories: { $regex: search, $options: "i" } }, 
-        { location: { $regex: search, $options: "i" } },
-      ];
-    }
-    
-    if (category) {
-      matchQuery.categories = category;
-    }
+    app.get("/vehicles", async (req, res) => {
+      try {
+        const { search, category, sortBy } = req.query;
 
-    let sortQuery = { _id: -1 }; 
-    if (sortBy === "price-asc") sortQuery = { pricePerDay: 1 };
-    else if (sortBy === "price-desc") sortQuery = { pricePerDay: -1 };
-    else if (sortBy === "rating") sortQuery = { ratings: -1 };
+        let matchQuery = { status: "verified" };
 
-    const result = await vehiclescollection.aggregate([
-      { $match: matchQuery },
-      {
-        $lookup: {
-          from: "promotion", 
-          let: { vId: { $toString: "$_id" } },
-          pipeline: [
-            { 
-              $match: { 
-                $expr: { 
-                  $and: [
-                    { $eq: ["$vehicleId", "$$vId"] }, 
-                    { $eq: ["$status", "approved"] }
-                  ]
-                }
-              }
-            }
-          ],
-          as: "activePromo"
+        if (search) {
+          matchQuery.$or = [
+            { vehicleName: { $regex: search, $options: "i" } },
+            { categories: { $regex: search, $options: "i" } },
+            { location: { $regex: search, $options: "i" } },
+          ];
         }
-      },
-      {
-        $addFields: {
-          promo: { $arrayElemAt: ["$activePromo", 0] },
-          ratings: { $ifNull: ["$ratings", 0] }
-        }
-      },
-      { $project: { activePromo: 0 } },
-      { $sort: sortQuery }
-    ]).toArray();
 
-    res.send(result);
-  } catch (error) {
-    console.error("Aggregation Error:", error);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
-    
+        if (category) {
+          matchQuery.categories = category;
+        }
+
+        let sortQuery = { _id: -1 };
+        if (sortBy === "price-asc") sortQuery = { pricePerDay: 1 };
+        else if (sortBy === "price-desc") sortQuery = { pricePerDay: -1 };
+        else if (sortBy === "rating") sortQuery = { ratings: -1 };
+
+        const result = await vehiclescollection
+          .aggregate([
+            { $match: matchQuery },
+            {
+              $lookup: {
+                from: "promotion",
+                let: { vId: { $toString: "$_id" } },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ["$vehicleId", "$$vId"] },
+                          { $eq: ["$status", "approved"] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+                as: "activePromo",
+              },
+            },
+            {
+              $addFields: {
+                promo: { $arrayElemAt: ["$activePromo", 0] },
+                ratings: { $ifNull: ["$ratings", 0] },
+              },
+            },
+            { $project: { activePromo: 0 } },
+            { $sort: sortQuery },
+          ])
+          .toArray();
+
+        res.send(result);
+      } catch (error) {
+        console.error("Aggregation Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
     app.get("/vehicles/top", async (req, res) => {
-  try {
-    const result = await vehiclescollection.aggregate([
-      { $match: { status: "verified" } },
-      { $sort: { bookingCount: -1 } },
-      { $limit: 4 },
-      {
-        $lookup: {
-          from: "promotion",
-          let: { vId: { $toString: "$_id" } },
-          pipeline: [
-            { $match: { $expr: { $and: [
-              { $eq: ["$vehicleId", "$$vId"] },
-              { $eq: ["$status", "approved"] }
-            ] } } }
-          ],
-          as: "activePromo"
-        }
-      },
-      {
-        $addFields: {
-          promo: { $arrayElemAt: ["$activePromo", 0] },
-          ratings: { $ifNull: ["$ratings", 0] }
-        }
-      },
-      { $project: { activePromo: 0 } }
-    ]).toArray();
+      try {
+        const result = await vehiclescollection
+          .aggregate([
+            { $match: { status: "verified" } },
+            { $sort: { bookingCount: -1 } },
+            { $limit: 4 },
+            {
+              $lookup: {
+                from: "promotion",
+                let: { vId: { $toString: "$_id" } },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ["$vehicleId", "$$vId"] },
+                          { $eq: ["$status", "approved"] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+                as: "activePromo",
+              },
+            },
+            {
+              $addFields: {
+                promo: { $arrayElemAt: ["$activePromo", 0] },
+                ratings: { $ifNull: ["$ratings", 0] },
+              },
+            },
+            { $project: { activePromo: 0 } },
+          ])
+          .toArray();
 
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Error fetching top vehicles" });
-  }
-});
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Error fetching top vehicles" });
+      }
+    });
 
     app.post("/vehicles", verifyToken, verifyHost, async (req, res) => {
       const newVehicle = req.body;
@@ -451,37 +461,44 @@ async function run() {
     });
 
     // Statistics API
-app.get("/site-stats", async (req, res) => {
-  try {
-    const totalVehicles = await vehiclescollection.countDocuments({ status: "verified" });
+    app.get("/site-stats", async (req, res) => {
+      try {
+        const totalVehicles = await vehiclescollection.countDocuments({
+          status: "verified",
+        });
 
-    const totalHappyCustomers = await paymentsCollection.countDocuments();
+        const totalHappyCustomers = await paymentsCollection.countDocuments();
 
-    const totalSubscriptions = await newsletterCollection.countDocuments();
+        const totalSubscriptions = await newsletterCollection.countDocuments();
 
-    const reviewStats = await webReviewsCollection.aggregate([
-      { $match: { status: "approved" } },
-      {
-        $group: {
-          _id: null,
-          averageRating: { $avg: "$rating" },
-          totalReviews: { $sum: 1 }
-        }
+        const reviewStats = await webReviewsCollection
+          .aggregate([
+            { $match: { status: "approved" } },
+            {
+              $group: {
+                _id: null,
+                averageRating: { $avg: "$rating" },
+                totalReviews: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const avgRating =
+          reviewStats.length > 0
+            ? reviewStats[0].averageRating.toFixed(1)
+            : "0.0";
+
+        res.send({
+          totalVehicles,
+          totalHappyCustomers,
+          totalSubscriptions,
+          avgRating,
+        });
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch stats" });
       }
-    ]).toArray();
-
-    const avgRating = reviewStats.length > 0 ? reviewStats[0].averageRating.toFixed(1) : "0.0";
-
-    res.send({
-      totalVehicles,
-      totalHappyCustomers,
-      totalSubscriptions,
-      avgRating
     });
-  } catch (error) {
-    res.status(500).send({ message: "Failed to fetch stats" });
-  }
-});
 
     // --- Wishlist APIs ---
 
@@ -530,150 +547,177 @@ app.get("/site-stats", async (req, res) => {
       res.send(result);
     });
 
-app.get("/active-promotion", async (req, res) => {
-  try {
-    const now = new Date();
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    app.get("/active-promotion", async (req, res) => {
+      try {
+        const now = new Date();
+        const sevenDaysAgo = new Date();
+        sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    const expiredPromo = await promotionCollection.findOne({
-      status: "approved",
-      createdAt: { $lt: sevenDaysAgo },
-      isExpiryNotified: { $ne: true } 
-    });
-
-    if (expiredPromo) {
-      const admins = await userscollection
-        .find({ role: "admin" }, { projection: { email: 1 } })
-        .toArray();
-      const adminEmails = admins.map((admin) => admin.email);
-
-      const expiryNotifications = [
-        {
-          receiverEmail: expiredPromo.hostEmail,
-          title: "Promotion Expired!",
-          message: `Your special offer for ${expiredPromo.vehicleName} has ended after 7 days.`,
-          type: "promo_expired",
-          isRead: false,
-          timestamp: new Date(),
-          link: "/",
-        }
-      ];
-
-      adminEmails.forEach((email) => {
-        expiryNotifications.push({
-          receiverEmail: email,
-          title: "Promo Ended",
-          message: `The promotion for ${expiredPromo.vehicleName} by ${expiredPromo.hostEmail} has expired.`,
-          type: "admin_alert",
-          isRead: false,
-          timestamp: new Date(),
-          link: "/dashboard/manage-promotions",
+        const expiredPromo = await promotionCollection.findOne({
+          status: "approved",
+          createdAt: { $lt: sevenDaysAgo },
+          isExpiryNotified: { $ne: true },
         });
-      });
 
-      await notificationsCollection.insertMany(expiryNotifications);
+        if (expiredPromo) {
+          const admins = await userscollection
+            .find({ role: "admin" }, { projection: { email: 1 } })
+            .toArray();
+          const adminEmails = admins.map((admin) => admin.email);
 
-      await promotionCollection.updateOne(
-        { _id: expiredPromo._id },
-        { $set: { isExpiryNotified: true, status: "expired" } }
-      );
-    }
+          const expiryNotifications = [
+            {
+              receiverEmail: expiredPromo.hostEmail,
+              title: "Promotion Expired!",
+              message: `Your special offer for ${expiredPromo.vehicleName} has ended after 7 days.`,
+              type: "promo_expired",
+              isRead: false,
+              timestamp: new Date(),
+              link: "/",
+            },
+          ];
 
-    const result = await promotionCollection
-      .find({
-        status: "approved",
-        createdAt: { $gte: sevenDaysAgo }
-      })
-      .sort({ createdAt: -1 })
-      .limit(1)
-      .toArray();
+          adminEmails.forEach((email) => {
+            expiryNotifications.push({
+              receiverEmail: email,
+              title: "Promo Ended",
+              message: `The promotion for ${expiredPromo.vehicleName} by ${expiredPromo.hostEmail} has expired.`,
+              type: "admin_alert",
+              isRead: false,
+              timestamp: new Date(),
+              link: "/dashboard/manage-promotions",
+            });
+          });
 
-    res.send(result[0] || {});
+          await notificationsCollection.insertMany(expiryNotifications);
 
-  } catch (error) {
-    console.error("Promo Fetch & Expiry Error:", error);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
+          await promotionCollection.updateOne(
+            { _id: expiredPromo._id },
+            { $set: { isExpiryNotified: true, status: "expired" } }
+          );
+        }
+
+        const result = await promotionCollection
+          .find({
+            status: "approved",
+            createdAt: { $gte: sevenDaysAgo },
+          })
+          .sort({ createdAt: -1 })
+          .limit(1)
+          .toArray();
+
+        res.send(result[0] || {});
+      } catch (error) {
+        console.error("Promo Fetch & Expiry Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     // user dashboard
 
     app.post("/bookings", verifyToken, async (req, res) => {
-      if (req.tokenEmail !== req.body.userEmail) {
-        return res.status(403).send({ message: "Forbidden Access" });
+      const {
+        vehicleId,
+        startDate,
+        endDate,
+        userEmail,
+        hostEmail,
+        vehicleName,
+        userName,
+      } = req.body;
+      if (userEmail === hostEmail) {
+        return res
+          .status(400)
+          .send({ message: "You cannot book your own vehicle!" });
       }
+      const start = new Date(startDate);
+      const end = new Date(endDate);
 
-      const newBooking = req.body;
-
-      const query = {
-        userEmail: newBooking.userEmail,
-        vehicleId: newBooking.vehicleId,
+      const overlapping = await bookingscollection.findOne({
+        vehicleId: vehicleId,
         status: { $in: ["Pending", "Accepted", "Paid"] },
-      };
+        $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
+      });
 
-      const existing = await bookingscollection.findOne(query);
-
-      if (existing) {
+      if (overlapping) {
         return res.status(400).send({
-          message:
-            "You already have an active request or booking for this vehicle!",
+          message: "This vehicle is already reserved for these dates!",
         });
       }
 
+      const diffInTime = end - start;
+      const totalDays = Math.ceil(diffInTime / (1000 * 60 * 60 * 24)) + 1;
+
       const bookingData = {
-        ...newBooking,
+        ...req.body,
+        startDate: start,
+        endDate: end,
+        totalDays,
+        totalPrice: totalDays * req.body.price,
         status: "Pending",
         requestDate: new Date(),
       };
 
       const result = await bookingscollection.insertOne(bookingData);
 
-      const hostNotification = {
-        receiverEmail: newBooking.hostEmail,
-        title: "New Rental Request",
-        message: `${newBooking.userName} wishes to rent your ${newBooking.vehicleName}.`,
-        type: "request",
-        isRead: false,
-        timestamp: new Date(),
-        link: "/dashboard/booking-requests",
-      };
+      if (result.insertedId) {
+        await notificationsCollection.insertOne({
+          receiverEmail: hostEmail,
+          title: "New Booking Request!",
+          message: `${userName} wants to book your ${vehicleName} for ${totalDays} days.`,
+          type: "booking_request",
+          isRead: false,
+          timestamp: new Date(),
+          link: "/dashboard/manage-bookings",
+        });
+      }
 
-      await notificationsCollection.insertOne(hostNotification);
+      res.send(result);
+    });
 
-      res.send({
-        success: true,
-        message: "Request sent to host successfully!",
-        insertedId: result.insertedId,
-      });
+    app.get("/vehicle-booked-dates/:id", async (req, res) => {
+      const id = req.params.id;
+      const bookings = await bookingscollection
+        .find(
+          {
+            vehicleId: id,
+            status: { $in: ["Pending", "Accepted", "Paid"] },
+          },
+          { projection: { startDate: 1, endDate: 1 } }
+        )
+        .toArray();
+
+      res.send(bookings);
     });
 
     app.get("/booking-details/:id", verifyToken, async (req, res) => {
       try {
-    const id = req.params.id;
-    
-    if (!ObjectId.isValid(id)) {
-      return res.status(400).send({ message: "Invalid Booking ID" });
-    }
+        const id = req.params.id;
 
-    const query = { _id: new ObjectId(id) };
-    const result = await bookingscollection.findOne(query);
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).send({ message: "Invalid Booking ID" });
+        }
 
-    if (!result) {
-      return res.status(404).send({ message: "Booking not found" });
-    }
+        const query = { _id: new ObjectId(id) };
+        const result = await bookingscollection.findOne(query);
 
-    const userEmail = req.tokenEmail; 
-    if (result.userEmail !== userEmail && result.hostEmail !== userEmail) {
-      return res.status(403).send({ message: "Access Denied! This is not your booking." });
-    }
+        if (!result) {
+          return res.status(404).send({ message: "Booking not found" });
+        }
 
-    res.send(result);
-  } catch (error) {
-    console.error("Booking Details Error:", error);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
+        const userEmail = req.tokenEmail;
+        if (result.userEmail !== userEmail && result.hostEmail !== userEmail) {
+          return res
+            .status(403)
+            .send({ message: "Access Denied! This is not your booking." });
+        }
+
+        res.send(result);
+      } catch (error) {
+        console.error("Booking Details Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
 
     app.get("/user-overview/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
@@ -682,15 +726,16 @@ app.get("/active-promotion", async (req, res) => {
       }
 
       try {
-        const paidBookings = await bookingscollection.find({ userEmail: email, status: "Paid" })
-      .toArray();
+        const paidBookings = await bookingscollection
+          .find({ userEmail: email, status: "Paid" })
+          .toArray();
 
-       const totalSpent = paidBookings.reduce((sum, b) => {
-      const price = parseFloat(b.price || 0);
-      return sum + price;
-    }, 0);
+        const totalSpent = paidBookings.reduce((sum, b) => {
+          const price = parseFloat(b.totalPrice || 0);
+          return sum + price;
+        }, 0);
 
-    const totalBookingsCount = paidBookings.length;
+        const totalBookingsCount = paidBookings.length;
 
         const recentActivity = await bookingscollection
           .find({ userEmail: email })
@@ -699,12 +744,12 @@ app.get("/active-promotion", async (req, res) => {
           .toArray();
 
         const wishlistCount = await wishlistCollection.countDocuments({
-      userEmail: email,
-    });
+          userEmail: email,
+        });
 
         res.send({
           stats: {
-            totalBookings:totalBookingsCount,
+            totalBookings: totalBookingsCount,
             totalSpent: totalSpent.toFixed(2),
             wishlistCount,
           },
@@ -718,20 +763,23 @@ app.get("/active-promotion", async (req, res) => {
 
     app.get("/bookings", verifyToken, async (req, res) => {
       try {
-      const email = req.query.email.toLowerCase();
+        const email = req.query.email.toLowerCase();
 
-      if (req.tokenEmail !== email) {
-        return res.status(403).send({ message: "Forbidden Access" });
+        if (req.tokenEmail !== email) {
+          return res.status(403).send({ message: "Forbidden Access" });
+        }
+
+        const query = { userEmail: email };
+        const result = await bookingscollection
+          .find(query)
+          .sort({ _id: -1 })
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        console.error("Fetch Bookings Error:", error);
+        res.status(500).send({ message: "Failed to load bookings" });
       }
-
-      const query = { userEmail: email };
-      const result = await bookingscollection.find(query).sort({ _id: -1 }).toArray();
-      res.send(result);
-    } catch (error) {
-    console.error("Fetch Bookings Error:", error);
-    res.status(500).send({ message: "Failed to load bookings" });
-  }
-});
+    });
 
     app.get("/payments/:email", verifyToken, async (req, res) => {
       const email = req.params.email.toLowerCase();
@@ -754,45 +802,51 @@ app.get("/active-promotion", async (req, res) => {
     });
 
     app.post("/reviews", verifyToken, async (req, res) => {
-  const review = req.body;
-  const vehicleId = new ObjectId(review.vehicleId);
+      const review = req.body;
+      const vehicleId = new ObjectId(review.vehicleId);
 
-  try {
-    const hasBooked = await bookingscollection.findOne({
-      vehicleId: review.vehicleId,
-      userEmail: review.userEmail,
-      status: { $in: ["Accepted", "Paid"] },
-    });
+      try {
+        const hasBooked = await bookingscollection.findOne({
+          vehicleId: review.vehicleId,
+          userEmail: review.userEmail,
+          status: "Paid",
+          endDate: { $lt: new Date() },
+        });
 
-    if (!hasBooked) {
-      return res.status(403).send({ message: "Only confirmed guests can leave a review!" });
-    }
+        if (!hasBooked) {
+          return res
+            .status(403)
+            .send({ message: "Only confirmed guests can leave a review!" });
+        }
 
-    const reviewData = { ...review, createdAt: new Date() };
-    await reviewsCollection.insertOne(reviewData);
+        const reviewData = { ...review, createdAt: new Date() };
+        await reviewsCollection.insertOne(reviewData);
 
-    const vehicle = await vehiclescollection.findOne({ _id: vehicleId });
-    
-    const newTotalStars = (vehicle.totalStars || 0) + parseInt(review.rating);
-    const newTotalReviews = (vehicle.totalReviews || 0) + 1;
-    const newAvgRating = parseFloat((newTotalStars / newTotalReviews).toFixed(1));
+        const vehicle = await vehiclescollection.findOne({ _id: vehicleId });
 
-    await vehiclescollection.updateOne(
-      { _id: vehicleId },
-      {
-        $set: {
-          totalStars: newTotalStars,
-          totalReviews: newTotalReviews,
-          ratings: newAvgRating,
-        },
+        const newTotalStars =
+          (vehicle.totalStars || 0) + parseInt(review.rating);
+        const newTotalReviews = (vehicle.totalReviews || 0) + 1;
+        const newAvgRating = parseFloat(
+          (newTotalStars / newTotalReviews).toFixed(1)
+        );
+
+        await vehiclescollection.updateOne(
+          { _id: vehicleId },
+          {
+            $set: {
+              totalStars: newTotalStars,
+              totalReviews: newTotalReviews,
+              ratings: newAvgRating,
+            },
+          }
+        );
+
+        res.send({ success: true, message: "Review published!" });
+      } catch (error) {
+        res.status(500).send({ message: "Error posting review" });
       }
-    );
-
-    res.send({ success: true, message: "Review published!" });
-  } catch (error) {
-    res.status(500).send({ message: "Error posting review" });
-  }
-});
+    });
     app.get("/reviews/:vehicleId", async (req, res) => {
       const result = await reviewsCollection
         .find({ vehicleId: req.params.vehicleId })
@@ -849,10 +903,10 @@ app.get("/active-promotion", async (req, res) => {
           });
 
           const paidBookings = await bookingscollection
-      .find({ hostEmail: email, status: "Paid" })
-      .toArray();
+            .find({ hostEmail: email, status: "Paid" })
+            .toArray();
           const totalNetRevenue = paidBookings.reduce((sum, b) => {
-            const amount = parseFloat(b.price || 0);
+            const amount = parseFloat(b.totalPrice || 0);
             const netRevenue = amount * 0.9;
             return sum + netRevenue;
           }, 0);
@@ -868,7 +922,7 @@ app.get("/active-promotion", async (req, res) => {
           res.send({
             stats: {
               totalVehicles,
-              totalBookings:totalBookingsCount,
+              totalBookings: totalBookingsCount,
               totalRevenue: totalNetRevenue.toFixed(2),
               activeAssets: totalVehicles,
             },
@@ -878,7 +932,9 @@ app.get("/active-promotion", async (req, res) => {
               return {
                 name: b.vehicleName?.split(" ")[0] || "Vehicle",
                 revenue: Number((amount * 0.9).toFixed(2)),
-                date:b.paidAt ? new Date(b.paidAt).toLocaleDateString() : "N/A",
+                date: b.paidAt
+                  ? new Date(b.paidAt).toLocaleDateString()
+                  : "N/A",
               };
             }),
           });
@@ -976,11 +1032,11 @@ app.get("/active-promotion", async (req, res) => {
           const monthlyRevenue = {};
 
           payments.forEach((p) => {
-            const amount = parseFloat(p.bookingDetails?.price || 0);
+            const amount = parseFloat(p.bookingDetails?.totalPrice || 0);
             const adminFee = amount * 0.1;
             const netRevenue = amount - adminFee;
 
-            const vId = p.bookingDetails?.vehicleId;
+            const vId = p.bookingDetails?.vehicleId?.toString();
             const vName = p.bookingDetails?.vehicleName || "Unknown";
             const cat = categoryMap[vId] || "Standard";
 
@@ -1019,54 +1075,67 @@ app.get("/active-promotion", async (req, res) => {
       }
     );
 
-app.post(
-  "/request-promotion",
-  verifyToken,
-  verifyHost,
-  async (req, res) => {
-    const promoData = req.body;
-    
-    const result = await promotionCollection.insertOne({
-      ...promoData,
-      status: "pending",
-      createdAt: new Date(),
-    });
+    app.post(
+      "/request-promotion",
+      verifyToken,
+      verifyHost,
+      async (req, res) => {
+        const promoData = req.body;
 
-    if (result.insertedId) {
-      const admins = await userscollection
-        .find({ role: "admin" }, { projection: { email: 1 } })
-        .toArray();
-      const adminEmails = admins.map((admin) => admin.email);
+        const existingRequest = await promotionCollection.findOne({
+          vehicleId: promoData.vehicleId,
+          status: "pending",
+        });
 
-      const adminNotifications = adminEmails.map((email) => ({
-        receiverEmail: email, 
-        title: "New Promotion Request! 🚀",
-        message: `Host ${promoData.hostEmail} has requested a promotion for '${promoData.vehicleName}'.`,
-        type: "admin_alert",
-        isRead: false,
-        timestamp: new Date(),
-        link: "/dashboard/manage-promotions",
-      }));
+        if (existingRequest) {
+          return res.status(400).send({
+            message: "A promotion request is already pending for this vehicle!",
+          });
+        }
 
-      if (adminNotifications.length > 0) {
-        await notificationsCollection.insertMany(adminNotifications);
+        const result = await promotionCollection.insertOne({
+          ...promoData,
+          status: "pending",
+          createdAt: new Date(),
+        });
+
+        if (result.insertedId) {
+          const admins = await userscollection
+            .find({ role: "admin" }, { projection: { email: 1 } })
+            .toArray();
+          const adminEmails = admins.map((admin) => admin.email);
+
+          const adminNotifications = adminEmails.map((email) => ({
+            receiverEmail: email,
+            title: "New Promotion Request! 🚀",
+            message: `Host ${promoData.hostEmail} has requested a promotion for '${promoData.vehicleName}'.`,
+            type: "admin_alert",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/manage-promotions",
+          }));
+
+          if (adminNotifications.length > 0) {
+            await notificationsCollection.insertMany(adminNotifications);
+          }
+        }
+
+        res.send(result);
       }
-    }
-
-    res.send(result);
-  }
-);
+    );
     // --- Admin Dashboard ---
     app.get("/admin-overview", verifyToken, verifyAdmin, async (req, res) => {
       try {
         const totalUsers = await userscollection.countDocuments();
         const totalVehicles = await vehiclescollection.countDocuments();
-        const totalBookings = await bookingscollection.countDocuments({ status: "Paid" });
+        const totalBookings = await bookingscollection.countDocuments({
+          status: "Paid",
+        });
         const totalSubscribers = await newsletterCollection.countDocuments();
 
         const allPayments = await paymentsCollection.find().toArray();
         const totalRevenue = allPayments.reduce(
-          (sum, p) => sum + parseFloat(p.bookingDetails?.price || 0),
+          (sum, p) => sum + parseFloat(p.bookingDetails?.totalPrice || 0),
           0
         );
 
@@ -1099,8 +1168,16 @@ app.post(
 
     app.delete("/users/:id", verifyToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await userscollection.deleteOne(query);
+      const userToDelete = await userscollection.findOne({
+        _id: new ObjectId(id),
+      });
+      if (userToDelete?.email === req.tokenEmail) {
+        return res
+          .status(400)
+          .send({ message: "You cannot delete your own admin account!" });
+      }
+
+      const result = await userscollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
@@ -1125,45 +1202,48 @@ app.post(
       res.send(result);
     });
 
-    app.get("/vehicles/:id",  async (req, res) => {
+    app.get("/vehicles/:id", async (req, res) => {
       try {
         const id = req.params.id;
         if (!ObjectId.isValid(id)) {
           return res.status(400).send({ message: "Invalid ID format" });
         }
-        const result = await vehiclescollection.aggregate([
-      { $match: { _id: new ObjectId(id) } },
-      {
-        $lookup: {
-          from: "promotion", 
-          let: { vId: { $toString: "$_id" } },
-          pipeline: [
-            { 
-              $match: { 
-                $expr: { 
-                  $and: [
-                    { $eq: ["$vehicleId", "$$vId"] }, 
-                    { $eq: ["$status", "approved"] } 
-                  ]
-                }
-              }
-            }
-          ],
-          as: "activePromo"
-        }
-      },
-      {
-        $addFields: {
-          promo: { $arrayElemAt: ["$activePromo", 0] } 
-        }
-      },
-      { $project: { activePromo: 0 } } 
-    ]).toArray();
+        const result = await vehiclescollection
+          .aggregate([
+            { $match: { _id: new ObjectId(id) } },
+            {
+              $lookup: {
+                from: "promotion",
+                let: { vId: { $toString: "$_id" } },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $and: [
+                          { $eq: ["$vehicleId", "$$vId"] },
+                          { $eq: ["$status", "approved"] },
+                        ],
+                      },
+                    },
+                  },
+                ],
+                as: "activePromo",
+              },
+            },
+            {
+              $addFields: {
+                promo: { $arrayElemAt: ["$activePromo", 0] },
+              },
+            },
+            { $project: { activePromo: 0 } },
+          ])
+          .toArray();
 
-    if (result.length === 0) return res.status(404).send({ message: "Not found" });
-    
-    res.send(result[0]);
-  } catch (error) {
+        if (result.length === 0)
+          return res.status(404).send({ message: "Not found" });
+
+        res.send(result[0]);
+      } catch (error) {
         res.status(500).send(error);
       }
     });
@@ -1276,7 +1356,7 @@ app.post(
           const hostLifetime = {};
 
           payments.forEach((p) => {
-            const amount = parseFloat(p.bookingDetails?.price || 0);
+            const amount = parseFloat(p.bookingDetails?.totalPrice || 0);
             const adminFee = amount * COMMISSION_RATE;
             const hEmail = p.bookingDetails?.hostEmail;
             const vId = p.bookingDetails?.vehicleId;
@@ -1339,25 +1419,36 @@ app.post(
         }
       }
     );
-app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
-    const result = await promotionCollection.find().sort({ createdAt: -1 }).toArray();
-    res.send(result);
-});
+    app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await promotionCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
 
-   app.patch("/admin/approve-promo/:id", verifyToken, verifyAdmin, async (req, res) => {
-    const id = req.params.id;
-    const filter = { _id: new ObjectId(id) };
+    app.patch(
+      "/admin/approve-promo/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
 
-    const promo = await promotionCollection.findOne(filter);
-    if (!promo) return res.status(404).send({ message: "Promotion not found" });
+        const promo = await promotionCollection.findOne(filter);
+        if (!promo)
+          return res.status(404).send({ message: "Promotion not found" });
 
-    await promotionCollection.updateMany({ status: 'approved' }, { $set: { status: 'expired' } }); 
+        await promotionCollection.updateMany(
+          { status: "approved" },
+          { $set: { status: "expired" } }
+        );
 
-    const updateDoc = { $set: { status: 'approved' } };
-    const result = await promotionCollection.updateOne(filter, updateDoc);
+        const updateDoc = { $set: { status: "approved" } };
+        const result = await promotionCollection.updateOne(filter, updateDoc);
 
-    if (result.modifiedCount > 0) {
-        await notificationsCollection.insertOne({
+        if (result.modifiedCount > 0) {
+          await notificationsCollection.insertOne({
             receiverEmail: promo.hostEmail,
             title: "Promotion Approved! 🔥",
             message: `Good news! Your promotion for '${promo.vehicleName}' is now live on the home banner.`,
@@ -1365,193 +1456,226 @@ app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
             isRead: false,
             timestamp: new Date(),
             link: "/",
-        });
-    }
+          });
+        }
 
-    res.send(result);
-});
+        res.send(result);
+      }
+    );
 
-app.delete("/admin/reject-promo/:id", verifyToken, verifyAdmin, async (req, res) => {
-    const id = req.params.id;
-    const filter = { _id: new ObjectId(id) };
+    app.delete(
+      "/admin/reject-promo/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
 
-    const promo = await promotionCollection.findOne(filter);
-    if (!promo) return res.status(404).send({ message: "Promotion not found" });
+        const promo = await promotionCollection.findOne(filter);
+        if (!promo)
+          return res.status(404).send({ message: "Promotion not found" });
 
-    const result = await promotionCollection.deleteOne(filter);
+        const result = await promotionCollection.deleteOne(filter);
 
-    if (result.deletedCount > 0) {
-        await notificationsCollection.insertOne({
+        if (result.deletedCount > 0) {
+          await notificationsCollection.insertOne({
             receiverEmail: promo.hostEmail,
             title: "Promotion Rejected ⚠️",
             message: `Your promotion request for '${promo.vehicleName}' was not approved by admin.`,
             type: "alert",
             isRead: false,
             timestamp: new Date(),
-        });
-    }
+          });
+        }
 
-    res.send(result);
-});
-
-   // web review
-
-app.post("/web-reviews", verifyToken, async (req, res) => {
-  try {
-    const { email, text, rating } = req.body;
-
-    const userData = await userscollection.findOne({ email });
-    if (!userData) return res.status(404).send({ message: "User profile not found" });
-
-    const newReview = {
-      name: userData.name,
-      email: userData.email,
-      img: userData.photo || "https://i.pravatar.cc/150",
-      role: `Verified ${userData.role.charAt(0).toUpperCase() + userData.role.slice(1)}`,
-      text,
-      rating,
-      status: "pending",
-      createdAt: new Date()
-    };
-
-    const result = await webReviewsCollection.insertOne(newReview);
-
-    const admins = await userscollection
-      .find({ role: "admin" }, { projection: { email: 1 } })
-      .toArray();
-    
-    if (admins.length > 0) {
-      const adminNotifications = admins.map((admin) => ({
-        receiverEmail: admin.email,
-        title: "New Web Review!",
-        message: `${newReview.name} (${newReview.role}) gave a ${rating}-star review.`,
-        type: "admin_alert",
-        isRead: false,
-        timestamp: new Date(),
-        link: "/dashboard/manage-reviews",
-      }));
-      await notificationsCollection.insertMany(adminNotifications);
-    }
-
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
-
-
-
-app.get("/web-reviews",verifyToken, verifyAdmin, async (req, res) => {
-  const result = await webReviewsCollection
-    .find()
-    .sort({ createdAt: -1 })
-    .toArray();
-  res.send(result);
-});
-
-app.get("/approved-reviews", async (req, res) => {
-  try {
-    const query = { status: "approved" };
-    const result = await webReviewsCollection
-      .find(query)
-      .sort({ createdAt: -1 }) 
-      .limit(12)              
-      .toArray();
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Failed to fetch home reviews" });
-  }
-});
-app.patch("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const id = req.params.id;
-    const { status } = req.body;
-    const filter = { _id: new ObjectId(id) };
-    const updateDoc = {
-      $set: { status: status },
-    };
-    const result = await webReviewsCollection.updateOne(filter, updateDoc);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Update failed" });
-  }
-});
-
-app.delete("/web-reviews/:id",verifyToken, verifyAdmin, async (req, res) => {
-  try {
-    const id = req.params.id;
-    const query = { _id: new ObjectId(id) };
-    const result = await webReviewsCollection.deleteOne(query);
-    res.send(result);
-  } catch (error) {
-    res.status(500).send({ message: "Delete failed" });
-  }
-});
-
-
-
-// contacts
-app.post("/contacts", async (req, res) => {
-  try {
-    const contactData = {
-      ...req.body,
-      status: "pending",
-      createdAt: new Date(),
-    };
-
-    const result = await contactscollection.insertOne(contactData);
-
-    if (result.insertedId) {
-      const admins = await userscollection
-        .find({ role: "admin" }, { projection: { email: 1 } })
-        .toArray();
-
-      const adminNotifs = admins.map((admin) => ({
-        receiverEmail: admin.email,
-        title: "New Inquiry Received!",
-        message: `New message from ${contactData.name}: "${contactData.subject}"`,
-        type: "admin_alert",
-        isRead: false,
-        timestamp: new Date(),
-        link: "/dashboard/manage-contacts", 
-      }));
-
-      if (adminNotifs.length > 0) {
-        await notificationsCollection.insertMany(adminNotifs);
+        res.send(result);
       }
-    }
+    );
 
-    res.send({
-      success: true,
-      message: "Message sent and admin notified!",
-      insertedId: result.insertedId,
+    // web review
+
+    app.post("/web-reviews", verifyToken, async (req, res) => {
+      try {
+        const { email, text, rating } = req.body;
+
+        const userData = await userscollection.findOne({ email });
+        if (!userData)
+          return res.status(404).send({ message: "User profile not found" });
+
+        const newReview = {
+          name: userData.name,
+          email: userData.email,
+          img: userData.photo || "https://i.pravatar.cc/150",
+          role: `Verified ${
+            userData.role.charAt(0).toUpperCase() + userData.role.slice(1)
+          }`,
+          text,
+          rating,
+          status: "pending",
+          createdAt: new Date(),
+        };
+
+        const result = await webReviewsCollection.insertOne(newReview);
+
+        const admins = await userscollection
+          .find({ role: "admin" }, { projection: { email: 1 } })
+          .toArray();
+
+        if (admins.length > 0) {
+          const adminNotifications = admins.map((admin) => ({
+            receiverEmail: admin.email,
+            title: "New Web Review!",
+            message: `${newReview.name} (${newReview.role}) gave a ${rating}-star review.`,
+            type: "admin_alert",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/manage-reviews",
+          }));
+          await notificationsCollection.insertMany(adminNotifications);
+        }
+
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Internal Server Error" });
+      }
     });
 
-  } catch (error) {
-    console.error("Contact API Error:", error);
-    res.status(500).send({ message: "Internal Server Error" });
-  }
-});
+    app.get("/web-reviews", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await webReviewsCollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
 
-app.get("/admin/contacts", verifyToken, verifyAdmin, async (req, res) => {
-  const result = await contactscollection.find().sort({ createdAt: -1 }).toArray();
-  res.send(result);
-});
+    app.get("/approved-reviews", async (req, res) => {
+      try {
+        const query = { status: "approved" };
+        const result = await webReviewsCollection
+          .find(query)
+          .sort({ createdAt: -1 })
+          .limit(12)
+          .toArray();
+        res.send(result);
+      } catch (error) {
+        res.status(500).send({ message: "Failed to fetch home reviews" });
+      }
+    });
+    app.patch(
+      "/web-reviews/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const { status } = req.body;
+          const filter = { _id: new ObjectId(id) };
+          const updateDoc = {
+            $set: { status: status },
+          };
+          const result = await webReviewsCollection.updateOne(
+            filter,
+            updateDoc
+          );
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: "Update failed" });
+        }
+      }
+    );
 
-app.delete("/admin/contacts/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const result = await contactscollection.deleteOne({ _id: new ObjectId(id) });
-  res.send(result);
-});
+    app.delete(
+      "/web-reviews/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const id = req.params.id;
+          const query = { _id: new ObjectId(id) };
+          const result = await webReviewsCollection.deleteOne(query);
+          res.send(result);
+        } catch (error) {
+          res.status(500).send({ message: "Delete failed" });
+        }
+      }
+    );
 
-app.patch("/admin/contacts/replied/:id", verifyToken, verifyAdmin, async (req, res) => {
-  const id = req.params.id;
-  const result = await contactscollection.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: { status: "replied" } }
-  );
-  res.send(result);
-});
+    // contacts
+    app.post("/contacts", async (req, res) => {
+      try {
+        const contactData = {
+          ...req.body,
+          status: "pending",
+          createdAt: new Date(),
+        };
+
+        const result = await contactscollection.insertOne(contactData);
+
+        if (result.insertedId) {
+          const admins = await userscollection
+            .find({ role: "admin" }, { projection: { email: 1 } })
+            .toArray();
+
+          const adminNotifs = admins.map((admin) => ({
+            receiverEmail: admin.email,
+            title: "New Inquiry Received!",
+            message: `New message from ${contactData.name}: "${contactData.subject}"`,
+            type: "admin_alert",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/manage-contacts",
+          }));
+
+          if (adminNotifs.length > 0) {
+            await notificationsCollection.insertMany(adminNotifs);
+          }
+        }
+
+        res.send({
+          success: true,
+          message: "Message sent and admin notified!",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Contact API Error:", error);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    });
+
+    app.get("/admin/contacts", verifyToken, verifyAdmin, async (req, res) => {
+      const result = await contactscollection
+        .find()
+        .sort({ createdAt: -1 })
+        .toArray();
+      res.send(result);
+    });
+
+    app.delete(
+      "/admin/contacts/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const result = await contactscollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/admin/contacts/replied/:id",
+      verifyToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const result = await contactscollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status: "replied" } }
+        );
+        res.send(result);
+      }
+    );
     // --- NOTIFICATIONS SYSTEM ---
 
     app.get("/notifications/:email", verifyToken, async (req, res) => {
@@ -1589,7 +1713,6 @@ app.patch("/admin/contacts/replied/:id", verifyToken, verifyAdmin, async (req, r
         res.send(result);
       }
     );
-    
   } finally {
   }
 }
