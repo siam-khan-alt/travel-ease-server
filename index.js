@@ -256,7 +256,12 @@ async function run() {
 
     app.post("/payments", async (req, res) => {
       const payment = req.body;
-
+      if (payment.bookingDetails) {
+        payment.bookingDetails.userEmail =
+          payment.bookingDetails.userEmail?.toLowerCase();
+        payment.bookingDetails.hostEmail =
+          payment.bookingDetails.hostEmail?.toLowerCase();
+      }
       const paymentResult = await paymentsCollection.insertOne(payment);
 
       const filter = { _id: new ObjectId(payment.bookingId) };
@@ -282,7 +287,7 @@ async function run() {
       const admins = await userscollection
         .find({ role: "admin" }, { projection: { email: 1 } })
         .toArray();
-      const adminEmails = admins.map((admin) => admin.email);
+      const adminEmails = admins.map((admin) => admin.email?.toLowerCase());
 
       const notifications = [
         {
@@ -616,65 +621,82 @@ async function run() {
     // user dashboard
 
     app.post("/bookings", verifyToken, async (req, res) => {
-      const {
-        vehicleId,
-        startDate,
-        endDate,
-        userEmail,
-        hostEmail,
-        vehicleName,
-        userName,
-      } = req.body;
-      if (userEmail === hostEmail) {
-        return res
-          .status(400)
-          .send({ message: "You cannot book your own vehicle!" });
-      }
-      const start = new Date(startDate);
-      const end = new Date(endDate);
+      try {
+        const {
+          vehicleId,
+          startDate,
+          endDate,
+          userEmail,
+          hostEmail,
+          vehicleName,
+          userName,
+          price,
+        } = req.body;
 
-      const overlapping = await bookingscollection.findOne({
-        vehicleId: vehicleId,
-        status: { $in: ["Pending", "Accepted", "Paid"] },
-        $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
-      });
+        const normalizedUserEmail = userEmail?.toLowerCase();
+        const normalizedHostEmail = hostEmail?.toLowerCase();
+        if (normalizedUserEmail === normalizedHostEmail) {
+          return res
+            .status(400)
+            .send({ message: "You cannot book your own vehicle!" });
+        }
+        const start = new Date(startDate);
+        const end = new Date(endDate);
 
-      if (overlapping) {
-        return res.status(400).send({
-          message: "This vehicle is already reserved for these dates!",
+        if (start < new Date().setHours(0, 0, 0, 0)) {
+          return res
+            .status(400)
+            .send({ message: "Cannot book for a past date!" });
+        }
+        const overlapping = await bookingscollection.findOne({
+          vehicleId: vehicleId,
+          status: { $in: ["Pending", "Accepted", "Paid"] },
+          $or: [{ startDate: { $lte: end }, endDate: { $gte: start } }],
         });
+
+        if (overlapping) {
+          return res.status(400).send({
+            message: "This vehicle is already reserved for these dates!",
+          });
+        }
+
+        const diffInTime = end - start;
+        const totalDays = Math.ceil(diffInTime / (1000 * 60 * 60 * 24)) + 1;
+
+        const bookingData = {
+          ...req.body,
+          userEmail: normalizedUserEmail,
+          hostEmail: normalizedHostEmail,
+          startDate: start,
+          endDate: end,
+          totalDays,
+          totalPrice: totalDays * req.body.price,
+          status: "Pending",
+          requestDate: new Date(),
+        };
+
+        const result = await bookingscollection.insertOne(bookingData);
+
+        if (result.insertedId) {
+          await notificationsCollection.insertOne({
+            receiverEmail: normalizedHostEmail,
+            title: "New Booking Request!",
+            message: `${userName} wants to book your ${vehicleName} for ${totalDays} days.`,
+            type: "booking_request",
+            isRead: false,
+            timestamp: new Date(),
+            link: "/dashboard/booking-requests",
+          });
+        }
+
+        res.send(result);
+      } catch (error) {
+        console.error("Booking Error:", error);
+        res
+          .status(500)
+          .send({ message: "Something went wrong in the booking process!" });
       }
-
-      const diffInTime = end - start;
-      const totalDays = Math.ceil(diffInTime / (1000 * 60 * 60 * 24)) + 1;
-
-      const bookingData = {
-        ...req.body,
-        startDate: start,
-        endDate: end,
-        totalDays,
-        totalPrice: totalDays * req.body.price,
-        status: "Pending",
-        requestDate: new Date(),
-      };
-
-      const result = await bookingscollection.insertOne(bookingData);
-
-      if (result.insertedId) {
-        await notificationsCollection.insertOne({
-          receiverEmail: hostEmail,
-          title: "New Booking Request!",
-          message: `${userName} wants to book your ${vehicleName} for ${totalDays} days.`,
-          type: "booking_request",
-          isRead: false,
-          timestamp: new Date(),
-          link: "/dashboard/manage-bookings",
-        });
-      }
-
-      res.send(result);
     });
-
     app.get("/vehicle-booked-dates/:id", async (req, res) => {
       const id = req.params.id;
       const bookings = await bookingscollection
@@ -731,8 +753,10 @@ async function run() {
           .toArray();
 
         const totalSpent = paidBookings.reduce((sum, b) => {
-          const price = parseFloat(b.totalPrice || 0);
-          return sum + price;
+          const amount =
+            parseFloat(b.totalPrice) ||
+            parseFloat(b.price || 0) * parseInt(b.totalDays || 1);
+          return sum + amount;
         }, 0);
 
         const totalBookingsCount = paidBookings.length;
@@ -906,8 +930,12 @@ async function run() {
             .find({ hostEmail: email, status: "Paid" })
             .toArray();
           const totalNetRevenue = paidBookings.reduce((sum, b) => {
-            const amount = parseFloat(b.totalPrice || 0);
+            const amount =
+              parseFloat(b.totalPrice) ||
+              parseFloat(b.price || 0) * parseInt(b.totalDays || 1);
+
             const netRevenue = amount * 0.9;
+
             return sum + netRevenue;
           }, 0);
 
@@ -915,28 +943,32 @@ async function run() {
 
           const recentActivity = await bookingscollection
             .find({ hostEmail: email })
-            .sort({ requestDate: -1 })
+            .sort({ _id: -1 })
             .limit(5)
             .toArray();
 
+          const formattedChartData = paidBookings.map((b) => ({
+            name: b.vehicleName?.split(" ")[0] || "Unit",
+            fullName: b.vehicleName,
+            price: parseFloat(
+              (parseFloat(b.totalPrice || b.price * b.totalDays) * 0.9).toFixed(
+                2
+              )
+            ),
+            date: new Date(b.paidAt || b.date).toLocaleDateString("en-GB", {
+              day: "numeric",
+              month: "short",
+            }),
+          }));
           res.send({
             stats: {
               totalVehicles,
-              totalBookings: totalBookingsCount,
-              totalRevenue: totalNetRevenue.toFixed(2),
+              totalBookings: paidBookings.length,
+              totalRevenue: parseFloat(totalNetRevenue.toFixed(2)),
               activeAssets: totalVehicles,
             },
             recentActivity,
-            chartData: paidBookings.map((b) => {
-              const amount = parseFloat(b.price || 0);
-              return {
-                name: b.vehicleName?.split(" ")[0] || "Vehicle",
-                revenue: Number((amount * 0.9).toFixed(2)),
-                date: b.paidAt
-                  ? new Date(b.paidAt).toLocaleDateString()
-                  : "N/A",
-              };
-            }),
+            chartData: formattedChartData,
           });
         } catch (err) {
           console.error("Overview Error:", err);
@@ -1010,20 +1042,12 @@ async function run() {
             .find({ "bookingDetails.hostEmail": email })
             .toArray();
 
-          if (!payments || payments.length === 0) {
-            return res.send({
-              vehicleChartData: [],
-              categoryChartData: [],
-              monthlyChartData: [],
-            });
-          }
-
           const hostVehicles = await vehiclescollection
             .find({ userEmail: email })
             .toArray();
 
           const categoryMap = hostVehicles.reduce((acc, v) => {
-            acc[v._id.toString()] = v.categories || "Standard";
+            acc[v._id.toString()] = v.category || v.categories || "Standard";
             return acc;
           }, {});
 
@@ -1032,42 +1056,53 @@ async function run() {
           const monthlyRevenue = {};
 
           payments.forEach((p) => {
-            const amount = parseFloat(p.bookingDetails?.totalPrice || 0);
-            const adminFee = amount * 0.1;
-            const netRevenue = amount - adminFee;
+            const amount = parseFloat(p.bookingDetails?.totalPrice || p.bookingDetails?.price || 0);
+            const netRevenue = amount * 0.9;
 
             const vId = p.bookingDetails?.vehicleId?.toString();
-            const vName = p.bookingDetails?.vehicleName || "Unknown";
-            const cat = categoryMap[vId] || "Standard";
+            const vName =
+              p.bookingDetails?.vehicleName?.split(" ")[0] || "Unknown";
+            const cat = categoryMap[vId] || "Uncategorized";
 
-            const date = p.createdAt
-              ? new Date(p.createdAt)
-              : p._id.getTimestamp();
-            const month = date.toLocaleString("default", { month: "short" });
+            let dateValue = p.paidAt?.$date || p.paidAt || p.createdAt?.$date || p.createdAt;
+      
+      let date;
+      if (dateValue) {
+        date = new Date(dateValue);
+      } else {
+        date = p._id.getTimestamp(); 
+      }
+      
+      const month = (date instanceof Date && !isNaN(date)) 
+                    ? date.toLocaleString("default", { month: "short" }) 
+                    : null;
 
-            vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + netRevenue;
-            categoryRevenue[cat] = (categoryRevenue[cat] || 0) + netRevenue;
-            monthlyRevenue[month] = (monthlyRevenue[month] || 0) + netRevenue;
-          });
+      if (month) {
+        vehicleRevenue[vName] = (vehicleRevenue[vName] || 0) + netRevenue;
+        categoryRevenue[cat] = (categoryRevenue[cat] || 0) + netRevenue;
+        monthlyRevenue[month] = (monthlyRevenue[month] || 0) + netRevenue;
+      }
+    });
 
-          const vehicleChartData = Object.keys(vehicleRevenue).map((name) => ({
-            name,
-            value: Number(vehicleRevenue[name].toFixed(2)),
-          }));
+    const vehicleChartData = Object.keys(vehicleRevenue).map(name => ({
+      name,
+      value: Number(vehicleRevenue[name].toFixed(2)),
+    }));
 
-          const categoryChartData = Object.keys(categoryRevenue).map(
-            (name) => ({
-              name,
-              value: Number(categoryRevenue[name].toFixed(2)),
-            })
-          );
+    const categoryChartData = Object.keys(categoryRevenue).map(name => ({
+      name,
+      value: Number(categoryRevenue[name].toFixed(2)),
+    }));
 
-          const monthlyChartData = Object.keys(monthlyRevenue).map((name) => ({
-            name,
-            revenue: Number(monthlyRevenue[name].toFixed(2)),
-          }));
+    const monthOrder = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const monthlyChartData = monthOrder
+      .filter(m => monthlyRevenue[m]) // শুধু যেসব মাসে ডাটা আছে সেগুলো দেখাবে
+      .map(name => ({
+        name,
+        revenue: Number(monthlyRevenue[name].toFixed(2)),
+      }));
 
-          res.send({ vehicleChartData, categoryChartData, monthlyChartData });
+    res.send({ vehicleChartData, categoryChartData, monthlyChartData });
         } catch (error) {
           console.error("Host Analytics Error:", error);
           res.status(500).send({ message: "Host analytics load failed" });
@@ -1133,11 +1168,16 @@ async function run() {
         });
         const totalSubscribers = await newsletterCollection.countDocuments();
 
-        const allPayments = await paymentsCollection.find().toArray();
-        const totalRevenue = allPayments.reduce(
-          (sum, p) => sum + parseFloat(p.bookingDetails?.totalPrice || 0),
-          0
-        );
+        const revenueStats = await paymentsCollection.aggregate([
+      {
+        $group: {
+          _id: null,
+          total: { $sum: { $toDouble: { $ifNull: ["$bookingDetails.totalPrice", "$bookingDetails.price"] } } }
+        }
+      }
+    ]).toArray();
+
+    const totalRevenue = revenueStats.length > 0 ? revenueStats[0].total : 0;
 
         const userRoles = await userscollection
           .aggregate([{ $group: { _id: "$role", count: { $sum: 1 } } }])
@@ -1321,104 +1361,80 @@ async function run() {
       }
     );
 
-    app.delete(
-      "/admin/bookings/:id",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        const id = req.params.id;
-        const query = { _id: new ObjectId(id) };
-        const result = await bookingscollection.deleteOne(query);
-        res.send(result);
-      }
-    );
+   
 
-    app.get(
-      "/admin-revenue-analytics",
-      verifyToken,
-      verifyAdmin,
-      async (req, res) => {
-        try {
-          const payments = await paymentsCollection.find().toArray();
-          const vehicles = await vehiclescollection.find().toArray();
-          const hosts = await userscollection.find({ role: "host" }).toArray();
+app.get("/admin-revenue-analytics", verifyToken, verifyAdmin, async (req, res) => {
+    try {
+        const [payments, vehicles] = await Promise.all([
+            paymentsCollection.find().toArray(),
+            vehiclescollection.find().toArray()
+        ]);
 
-          const vehicleMap = vehicles.reduce((acc, v) => {
-            acc[v._id.toString()] = { cat: v.categories, brand: v.brand };
-            return acc;
-          }, {});
-
-          const COMMISSION_RATE = 0.1;
-          const monthlyTotal = {};
-          const monthlyAdmin = {};
-          const categoryMonthly = {};
-          const brandMonthly = {};
-          const hostLifetime = {};
-
-          payments.forEach((p) => {
-            const amount = parseFloat(p.bookingDetails?.totalPrice || 0);
-            const adminFee = amount * COMMISSION_RATE;
-            const hEmail = p.bookingDetails?.hostEmail;
-            const vId = p.bookingDetails?.vehicleId;
-            const vInfo = vehicleMap[vId] || {
-              cat: "Standard",
-              brand: "Other",
+        const vehicleMap = {};
+        vehicles.forEach(v => {
+            vehicleMap[v._id.toString()] = { 
+                cat: v.categories || "Standard", 
+                brand: v.brand || "Other" 
             };
+        });
 
-            const date = p.createdAt
-              ? new Date(p.createdAt)
-              : p._id.getTimestamp();
+        const COMMISSION_RATE = 0.1;
+        const stats = {}; 
+        const categoryData = {};
+        const brandData = {};
+        const hostData = {};
+
+        payments.forEach((p) => {
+            const amount = parseFloat(p.totalPrice || p.price || p.bookingDetails?.totalPrice || p.bookingDetails?.price || 0);
+            if (amount === 0) return; 
+
+            const adminFee = amount * COMMISSION_RATE;
+            const hEmail = p.hostEmail || p.bookingDetails?.hostEmail || "Unknown";
+            
+            const vId = (p.vehicleId || p.bookingDetails?.vehicleId)?.toString();
+            const vInfo = vehicleMap[vId] || { cat: "Standard", brand: "Other" };
+
+            let date;
+            const rawDate = p.paidAt || p.requestDate || p.createdAt;
+            if (rawDate) {
+                date = new Date(rawDate.$date || rawDate);
+            } else {
+                date = new Date(parseInt(p._id.toString().substring(0, 8), 16) * 1000);
+            }
+
+            if (isNaN(date.getTime())) date = new Date();
+
             const month = date.toLocaleString("default", { month: "short" });
+            const monthIndex = date.getMonth();
 
-            monthlyTotal[month] = (monthlyTotal[month] || 0) + amount;
-            monthlyAdmin[month] = (monthlyAdmin[month] || 0) + adminFee;
+            if (!stats[month]) {
+                stats[month] = { month, total: 0, commission: 0, index: monthIndex };
+            }
+            stats[month].total += amount;
+            stats[month].commission += adminFee;
 
-            const catKey = `${month}-${vInfo.cat}`;
-            categoryMonthly[catKey] = (categoryMonthly[catKey] || 0) + amount;
+            categoryData[vInfo.cat] = (categoryData[vInfo.cat] || 0) + amount;
+            brandData[vInfo.brand] = (brandData[vInfo.brand] || 0) + amount;
+            hostData[hEmail] = (hostData[hEmail] || 0) + amount;
+        });
 
-            const brandKey = `${month}-${vInfo.brand}`;
-            brandMonthly[brandKey] = (brandMonthly[brandKey] || 0) + amount;
+        const sortedMonthlyData = Object.values(stats).sort((a, b) => a.index - b.index);
 
-            hostLifetime[hEmail] = (hostLifetime[hEmail] || 0) + amount;
-          });
-
-          const adminCommissionData = Object.keys(monthlyAdmin).map((m) => ({
-            month: m,
-            commission: monthlyAdmin[m],
-          }));
-          const totalRevenueData = Object.keys(monthlyTotal).map((m) => ({
-            month: m,
-            total: monthlyTotal[m],
-          }));
-
-          const catChartData = Object.keys(categoryMonthly).map((key) => ({
-            name: key.split("-")[1],
-            month: key.split("-")[0],
-            value: categoryMonthly[key],
-          }));
-
-          const brandChartData = Object.keys(brandMonthly).map((key) => ({
-            name: key.split("-")[1],
-            value: brandMonthly[key],
-          }));
-
-          const hostChartData = Object.keys(hostLifetime).map((email) => ({
-            host: email.split("@")[0],
-            revenue: hostLifetime[email],
-          }));
-
-          res.send({
-            adminCommissionData,
-            totalRevenueData,
-            catChartData,
-            brandChartData,
-            hostChartData,
-          });
-        } catch (error) {
-          res.status(500).send({ message: "Revenue load failed" });
-        }
-      }
-    );
+        res.send({
+            adminCommissionData: sortedMonthlyData.map(s => ({ month: s.month, commission: Number(s.commission.toFixed(2)) })),
+            totalRevenueData: sortedMonthlyData.map(s => ({ month: s.month, total: s.total })),
+            catChartData: Object.entries(categoryData).map(([name, value]) => ({ name, value })),
+            brandChartData: Object.entries(brandData).map(([name, value]) => ({ name, value })),
+            hostChartData: Object.entries(hostData).map(([email, revenue]) => ({ 
+                host: email.split("@")[0], 
+                revenue 
+            })).sort((a,b) => b.revenue - a.revenue).slice(0, 5) 
+        });
+    } catch (error) {
+        console.error("Analytics Error:", error);
+        res.status(500).send({ message: "Analytics Error", error: error.message });
+    }
+});
     app.get("/admin/promotions", verifyToken, verifyAdmin, async (req, res) => {
       const result = await promotionCollection
         .find()
